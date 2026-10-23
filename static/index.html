@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>古气候数据分析可视化系统</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20261022b" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header-content">
+        <h1>
+          <span class="logo-mark">◈</span>
+          古气候数据分析可视化系统
+          <span class="header-badge">PaleoVis</span>
+        </h1>
+        <div class="header-info">
+          <span class="current-file" id="currentFileLabel"></span>
+          <span class="status-indicator">
+            <span class="status-dot"></span>
+            <span id="serverStatus">服务器连接中…</span>
+          </span>
+          <a class="header-link" href="/docs" target="_blank" rel="noopener">API 文档</a>
+        </div>
+      </div>
+    </header>
+
+    <nav class="menubar">
+      <div class="menu-item" data-menu="data">
+        <button class="menu-trigger">
+          <span>文件</span>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <div class="menu-dropdown">
+          <button class="menu-option active" data-tool="select">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              <circle cx="15" cy="15" r="3" />
+              <path d="M17 17l2 2" />
+            </svg>
+            <span>选择 / 上传文件</span>
+          </button>
+          <div class="menu-submenu" data-submenu="map">
+            <button class="menu-option has-submenu" data-tool="map">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z" />
+                <path d="M8 2v16M16 6v16" />
+              </svg>
+              <span>地图查询</span>
+              <svg class="submenu-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+            </button>
+            <div class="submenu-panel">
+              <button class="menu-option submenu-option active" data-field-mode="climatology">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 12h18M12 3v18" />
+                  <circle cx="12" cy="12" r="9" />
+                </svg>
+                <span>气候态</span>
+              </button>
+              <button class="menu-option submenu-option" data-field-mode="anomaly">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 16l5-6 4 4 5-8 4 5" />
+                  <path d="M3 20h18" />
+                </svg>
+                <span>异常场</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="menu-item" data-menu="timeseries">
+        <button class="menu-trigger">
+          <span>时序分析</span>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <div class="menu-dropdown">
+          <button class="menu-option" data-tool="power-spectrum">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3v18h18" />
+              <path d="M7 16l4-8 4 4 4-10" />
+            </svg>
+            <span>功率谱分析</span>
+          </button>
+          <button class="menu-option" data-tool="wavelet">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 12c2-4 4-6 6-6s2 6 4 6 2-6 4-6 2 4 4 6" />
+              <path d="M2 18c2-2 4-3 6-3s2 3 4 3 2-3 4-3 2 2 4 3" />
+            </svg>
+            <span>小波分析</span>
+          </button>
+          <button class="menu-option" data-tool="period">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 2a15 15 0 010 20M12 2a15 15 0 000 20M2 12h20" />
+            </svg>
+            <span>周期分析</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="menu-item" data-menu="advanced">
+        <button class="menu-trigger">
+          <span>高级分析</span>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <div class="menu-dropdown">
+          <button class="menu-option" data-tool="abrupt-change">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 22h20L12 2z" />
+              <path d="M12 8v6M12 17v1" />
+            </svg>
+            <span>突变分析</span>
+          </button>
+          <button class="menu-option" data-tool="cross-spectrum">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 12c0-4 3-7 8-7s8 3 8 7-3 7-8 7-8-3-8-7z" />
+              <path d="M4 12c0 4 3 7 8 7" />
+            </svg>
+            <span>交叉谱分析</span>
+          </button>
+          <button class="menu-option" data-tool="eemd">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 12c3-4 5-4 7 0s4 4 6 0 4-4 7 0" />
+              <path d="M2 18c3-2 5-2 7 0s4 2 6 0 4-2 7 0" />
+            </svg>
+            <span>经验模态分解 (EEMD)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="menu-item" data-menu="compare">
+        <button class="menu-trigger">
+          <span>对比工具</span>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <div class="menu-dropdown">
+          <button class="menu-option" data-tool="correlation">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3" />
+              <circle cx="5" cy="5" r="2" opacity="0.5" />
+              <circle cx="19" cy="19" r="2" opacity="0.5" />
+              <circle cx="5" cy="19" r="2" opacity="0.5" />
+              <circle cx="19" cy="5" r="2" opacity="0.5" />
+            </svg>
+            <span>相关性分析</span>
+          </button>
+          <button class="menu-option" data-tool="compare">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3v18M16 3v18" />
+              <path d="M8 8h6M16 16H10" />
+            </svg>
+            <span>多序列对比</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="menu-spacer"></div>
+
+      <div class="menu-actions">
+        <button class="action-btn" id="uploadBtn" title="上传 NetCDF 文件">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+            <path d="M17 8l-5-5-5 5M12 3v12" />
+          </svg>
+          <span>上传</span>
+        </button>
+        <button class="action-btn" id="downloadBtn" title="下载原始文件">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+            <path d="M7 10l5 5 5-5M12 15V3" />
+          </svg>
+          <span>下载</span>
+        </button>
+        <button class="action-btn danger" id="deleteBtn" title="删除当前文件">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+          </svg>
+          <span>删除</span>
+        </button>
+      </div>
+    </nav>
+
+    <main class="main-content">
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <h3>数据文件</h3>
+          <div class="file-list" id="fileList">
+            <div class="file-empty">加载中…</div>
+          </div>
+          <div class="upload-progress" id="uploadProgress">
+            <div class="bar-wrap"><div class="bar"></div></div>
+            <span>准备上传…</span>
+          </div>
+        </div>
+
+        <div class="sidebar-section" id="querySection">
+          <h3 id="queryTitle">数据查询</h3>
+          <div class="segmented" id="modeSwitch">
+            <button class="seg-btn active" data-selection-mode="point">点位</button>
+            <button class="seg-btn" data-selection-mode="area">区域平均</button>
+          </div>
+
+          <div id="pointFields">
+            <div class="form-group" id="pointLatField">
+              <label for="latitude">纬度 (°N)</label>
+              <input type="number" id="latitude" value="35.0" min="-90" max="90" step="0.1" />
+            </div>
+            <div class="form-group" id="pointLonField">
+              <label for="longitude">经度 (°E)</label>
+              <input type="number" id="longitude" value="105.0" min="-180" max="360" step="0.1" />
+            </div>
+          </div>
+
+          <div id="areaFields" style="display: none">
+            <div class="form-row" id="areaLatRow">
+              <div class="form-group">
+                <label for="latMin">南界 (°N)</label>
+                <input type="number" id="latMin" value="-10" min="-90" max="90" step="1" />
+              </div>
+              <div class="form-group">
+                <label for="latMax">北界 (°N)</label>
+                <input type="number" id="latMax" value="50" min="-90" max="90" step="1" />
+              </div>
+            </div>
+            <div class="form-row" id="areaLonRow">
+              <div class="form-group">
+                <label for="lonMin">西界 (°E)</label>
+                <input type="number" id="lonMin" value="70" min="-180" max="360" step="1" />
+              </div>
+              <div class="form-group">
+                <label for="lonMax">东界 (°E)</label>
+                <input type="number" id="lonMax" value="140" min="-180" max="360" step="1" />
+              </div>
+            </div>
+          </div>
+
+          <div class="query-note" id="queryNote" style="display: none"></div>
+
+          <div id="selectionSummary" class="selection-summary"></div>
+
+          <button id="fetchBtn" class="btn-primary">获取数据</button>
+          <div id="dataInfo" class="data-info" style="display: none"></div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>数据选择</h3>
+          <div class="form-group">
+            <label for="variableSelect">变量</label>
+            <select id="variableSelect"></select>
+          </div>
+          <div class="form-group" id="levelGroup" style="display: none">
+            <label for="levelSelect">层次</label>
+            <select id="levelSelect"></select>
+          </div>
+          <div class="form-group">
+            <label>时间范围</label>
+            <div class="dual-range" id="timeRangeDual">
+              <div class="dual-range-track"></div>
+              <div class="dual-range-fill" id="rangeFill"></div>
+              <input type="range" id="timeStart" min="0" max="100" value="0" aria-label="起始时次" />
+              <input type="range" id="timeEnd" min="0" max="100" value="100" aria-label="结束时次" />
+            </div>
+            <div class="time-input-row">
+              <input type="number" id="timeStartInput" min="0" value="0" aria-label="起始时次输入" />
+              <span class="time-arrow">→</span>
+              <input type="number" id="timeEndInput" min="0" value="100" aria-label="结束时次输入" />
+            </div>
+            <div class="range-label" id="timeRangeLabel">—</div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="content-area">
+        <div class="content-header">
+          <div class="tab-container">
+            <button class="tab active" data-tab="data-view">数据视图</button>
+            <button class="tab" data-tab="map-view">地图视图</button>
+            <button class="tab" data-tab="chart-view">图表视图</button>
+            <button class="tab" data-tab="analysis-view">分析视图</button>
+          </div>
+          <div class="content-actions">
+            <button class="action-btn" id="exportBtn" title="导出当前序列为 CSV">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              <span>导出 CSV</span>
+            </button>
+            <button class="action-btn" id="exportNetcdfBtn" title="导出当前选取范围的 NetCDF 子集">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <path d="M14 2v6h6M9 15h6M12 12v6" />
+              </svg>
+              <span>导出子集</span>
+            </button>
+            <button class="action-btn" id="refreshBtn" title="刷新数据">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+              </svg>
+              <span>刷新</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="content-body">
+          <!-- 地图场模式栏：气候态 / 异常场 -->
+          <div class="map-mode-bar" id="mapModeBar">
+            <button class="map-mode-btn active" data-field-mode="climatology" title="所选时段的时间平均">气候态</button>
+            <button class="map-mode-btn" data-field-mode="anomaly" title="相对基准气候态的偏差">异常场</button>
+            <span class="anomaly-baseline" id="anomalyBaseline">
+              <span class="ab-label">基准时段</span>
+              <input type="number" id="anomalyStart" min="0" step="1" placeholder="起始" aria-label="基准起始时次" />
+              <span class="ab-sep">~</span>
+              <input type="number" id="anomalyEnd" min="0" step="1" placeholder="结束" aria-label="基准结束时次" />
+              <button class="ab-apply" id="anomalyApply" title="应用基准时段">应用</button>
+              <span class="ab-reset" id="anomalyReset" title="恢复默认基准（前半段）">默认</span>
+            </span>
+            <span class="map-mode-hint" id="mapModeHint"></span>
+          </div>
+          <div id="dataContainer" class="data-container is-active">
+            <div class="chart-empty">
+              <svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="#cbd5e1" stroke-width="1.5">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                <path d="M2 19h20" />
+              </svg>
+              <p>暂无数据文件</p>
+              <span>点击「上传」或拖拽 .nc 文件到窗口，也可直接使用 data/samples 中的示例数据</span>
+            </div>
+          </div>
+          <div id="mapContainer" class="map-container"></div>
+          <div id="chartContainer" class="chart-container">
+            <div class="chart-empty">
+              <svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="#cbd5e1" stroke-width="1.5">
+                <path d="M3 3v18h18" />
+                <path d="M7 16l4-8 4 4 4-10" />
+              </svg>
+              <p>暂无图表数据</p>
+              <span>在左侧输入经纬度并点击「获取数据」</span>
+            </div>
+          </div>
+          <div id="analysisContainer" class="analysis-container">
+            <div class="chart-empty">
+              <svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="#cbd5e1" stroke-width="1.5">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 1v6m0 6v6" />
+                <path d="M4.22 4.22l4.24 4.24m7.08 7.08l4.24 4.24" />
+                <path d="M1 12h6m6 0h6" />
+                <path d="M4.22 19.78l4.24-4.24m7.08-7.08l4.24-4.24" />
+              </svg>
+              <p>请选择分析工具</p>
+              <span>从上方「时序分析」「高级分析」「对比工具」中选择方法</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <input type="file" id="fileInput" accept=".nc,.nc4,.cdf,.netcdf,.grd" style="display: none" />
+
+    <!-- 文件选择弹窗 -->
+    <div class="modal-mask" id="fileModal" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="fileModalTitle">
+        <header class="modal-head">
+          <h2 id="fileModalTitle">选择数据文件</h2>
+          <button class="modal-close" id="fileModalClose" aria-label="关闭">×</button>
+        </header>
+        <div class="modal-body">
+          <div class="modal-toolbar">
+            <button class="btn-primary modal-upload" id="modalUploadBtn">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <path d="M17 8l-5-5-5 5M12 3v12" />
+              </svg>
+              上传新文件
+            </button>
+            <span class="modal-hint" id="modalHint">支持 .nc / .nc4 / .cdf，也可直接把文件拖进窗口</span>
+          </div>
+          <div class="modal-progress" id="modalProgress" style="display: none">
+            <div class="bar-wrap"><div class="bar"></div></div>
+            <span>准备上传…</span>
+          </div>
+          <div class="modal-file-list" id="modalFileList">
+            <div class="file-empty">加载中…</div>
+          </div>
+        </div>
+        <footer class="modal-foot">
+          <span class="modal-foot-info" id="modalFootInfo"></span>
+          <div class="modal-foot-actions">
+            <button class="pre-reset" id="modalCancelBtn">取消</button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <!-- 坐标轴指定弹窗（自动识别失败时） -->
+    <div class="modal-mask" id="axisModal" aria-hidden="true">
+      <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="axisModalTitle">
+        <header class="modal-head">
+          <h2 id="axisModalTitle">指定坐标轴</h2>
+          <button class="modal-close" id="axisModalClose" aria-label="关闭">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="axis-intro">
+            未能自动识别该文件的经纬度坐标。请手动指定各坐标轴的含义，
+            系统会据此决定绘图方式与查询面板。
+          </p>
+          <div class="axis-grid" id="axisGrid"></div>
+          <div class="axis-preview" id="axisPreview"></div>
+        </div>
+        <footer class="modal-foot">
+          <span class="modal-foot-info">至少需要指定一个空间坐标（纬度或经度）</span>
+          <div class="modal-foot-actions">
+            <button class="pre-reset" id="axisCancelBtn">取消</button>
+            <button class="btn-primary axis-confirm" id="axisConfirmBtn">确定</button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <!-- ?v= 版本号用于强制刷新浏览器缓存，改动前端后请同步更新 -->
+    <script src="/static/js/theme.js?v=20261022b"></script>
+    <script src="/static/js/api.js?v=20261022b"></script>
+    <script src="/static/js/charts.js?v=20261022b"></script>
+    <script src="/static/js/map.js?v=20261022b"></script>
+    <script src="/static/js/xarray_view.js?v=20261022b"></script>
+    <script src="/static/js/analysis_view.js?v=20261022b"></script>
+    <script src="/static/js/app.js?v=20261022b"></script>
+  </body>
+</html>
