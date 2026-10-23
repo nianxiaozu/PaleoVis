@@ -127,34 +127,110 @@
     });
   }
 
-  /** 全局状态：当前文件、变量、时间范围与选取方式。 */
+  // ------------------------------------------------------------------ 全局状态
+
+  /**
+   * 数据集布局，对应后端 app/core/layout.py 的 classify_layout() 返回值。
+   * @typedef {Object} DataLayout
+   * @property {"timeseries"|"hovmoller"|"map"|"grid"|"profile"|"unknown"} kind 布局类型
+   * @property {string[]} dims 变量维度名列表
+   * @property {string|null} time 时间维名
+   * @property {string|null} lat 纬度维名
+   * @property {string|null} lon 经度维名
+   * @property {boolean} has_map 是否提供地图 / 时间-空间视图
+   * @property {"map"|"hovmoller"|null} map_mode 地图视图的渲染方式
+   * @property {"lat"|"lon"|null} hovmoller_axis Hovmöller 图使用的空间轴
+   * @property {string} label 中文描述，用于界面标题
+   */
+  /**
+   * /api/datasets/{id}/series 的返回体。
+   * @typedef {Object} SeriesPayload
+   * @property {string} variable 变量名
+   * @property {string} units 单位
+   * @property {string} long_name 变量长名
+   * @property {"timeseries"|"point"|"area_mean"} mode 取数方式
+   * @property {string[]} time 时间标签
+   * @property {number[]} time_index 全局时次索引
+   * @property {number[]} values 当前值（启用预处理后为处理结果）
+   * @property {number[]} raw_values 预处理前的原始值
+   * @property {{lat?:number,lat_index?:number,lon?:number,lon_index?:number}} [grid] 实际命中的格点
+   * @property {{lat?:number[],lon?:number[]}} [extent] 区域平均时实际参与计算的范围
+   * @property {{n:number,min:number|null,max:number|null,mean:number|null,std:number|null,median:number|null,nan_count:number}} stats 统计量
+   * @property {{applied:boolean,steps:string[],spec:Object,dt:number,reason?:string}} [preprocess] 预处理说明
+   */
   const state = {
+    // ---- 文件与数据集 ----
+    /** 文件列表，元素形如 { id, name, size, uploaded_at, source, suffix, readonly } */
     files: [],
+    /** 当前文件 id */
     currentFileId: null,
+    /** 数据集概览，结构见 /api/datasets/{id}/overview */
     overview: null,
+    /** 变量元数据数组（overview.variables 的值） */
     variables: [],
+    /** 当前变量名 */
     variable: null,
+    /** 当前数据集的布局，结构见 DataLayout；未选文件时为 null */
+    layout: null,
+    /** 文件 id -> 布局类型（kind），供文件弹窗显示类型标签 */
+    fileLayouts: {},
+    /** 用户手动指定的坐标轴：{ time?, lat?, lon? }，空对象表示完全自动识别 */
+    axisOverrides: {},
+
+    // ---- 时间与空间选取 ----
+    /** 时间范围（闭区间时次索引），null 表示整个时段 */
     timeRange: null,
-    selection: { mode: "point", lat: 35, lon: 105, latMin: -10, latMax: 50, lonMin: 70, lonMax: 140 },
-    // 地图场类型：climatology（气候态） / anomaly（异常场）
-    fieldMode: "climatology",
-    // 异常场基准时段（闭区间索引），null 表示由后端取默认 0 ~ max//2
-    anomalyBaseline: { start: null, end: null },
-    // 是否允许在地图上拖框选区域（仅完整经纬度场允许）
+    /** 空间选取：point 模式用 lat/lon，area 模式用 latMin/latMax/lonMin/lonMax */
+    selection: {
+      /** "point" | "area" */
+      mode: "point",
+      lat: 35,
+      lon: 105,
+      latMin: -10,
+      latMax: 50,
+      lonMin: 70,
+      lonMax: 140,
+    },
+    /** 是否允许在地图上拖框选区域（仅完整经纬度场允许） */
     allowRectSelect: true,
-    // 预处理配置：图表视图设置，分析视图复用
+
+    // ---- 地图场 ----
+    /** 地图场类型：climatology（气候态） / anomaly（异常场） */
+    fieldMode: "climatology",
+    /** 异常场基准时段（闭区间索引），两端为 null 时由后端取默认 0 ~ max//2 */
+    anomalyBaseline: { start: null, end: null },
+    /** 最近一次 Hovmöller 场，结构见 /api/datasets/{id}/field 返回体 */
+    hovmoller: null,
+
+    // ---- 预处理（图表视图设置，分析视图复用） ----
     preprocess: {
+      /** 去趋势方式："none" | "linear" | "mean" */
       detrend: "none",
+      /** 是否做 z-score 标准化 */
       standardize: false,
+      /** 滤波类型："none" | "lowpass" | "highpass" | "bandpass" */
       filter: "none",
+      /** 最短周期（低通、带通用，单位与时间轴一致） */
       filter_period_min: null,
+      /** 最长周期（高通、带通用，单位与时间轴一致） */
       filter_period_max: null,
+      /** Butterworth 滤波器阶数 */
       order: 4,
     },
+
+    // ---- 请求结果 ----
+    /** 当前序列，结构见 SeriesPayload */
     series: null,
+    /** 预处理前的原始序列（与 series.raw_values 一致，便于对比） */
     seriesRaw: null,
+    /** 最近一次分析结果，字段随分析类型而变 */
     analysis: null,
+
+    // ---- 事件与请求 ----
+    /** 事件监听表：{ [event]: handler[] } */
     listeners: {},
+    /** 分析接口请求体构造器，下方以 state.body = function (extra) {...} 赋值 */
+    body: null,
   };
 
   /** 判断当前是否配置了任何预处理。 */
@@ -162,8 +238,8 @@
     const p = state.preprocess;
     return Boolean(
       (p.detrend && p.detrend !== "none") ||
-        p.standardize ||
-        (p.filter && p.filter !== "none"),
+      p.standardize ||
+      (p.filter && p.filter !== "none"),
     );
   };
 

@@ -7,7 +7,7 @@ REM 如果下面这行报"conda 不是内部命令"，改用你本机的 activat
 REM call "D:/Anaconda3/Scripts\activate.bat" eastclimate_env
 call conda activate easyclimate_env
 if errorlevel 1 (
-    echo [错误] 激活 conda 环境 eastclimate_env 失败
+    echo [错误] 激活 conda 环境 easyclimate_env 失败
     pause
     exit /b 1
 )

@@ -89,8 +89,6 @@ def power_spectrum(
     out = analysis.power_spectrum(
         base["values"],
         dt=base["source"]["dt"],
-        detrend=request.detrend,
-        window=request.window,
     )
     base.update(out)
     return base

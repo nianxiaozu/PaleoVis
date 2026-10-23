@@ -43,81 +43,98 @@ def power_spectrum(
     *,
     dt: float = 1.0,
     detrend: str = "linear",
-    window: str = "hann",
+    min_periods: int = 10,
     max_periods: int = 200,
 ) -> dict[str, Any]:
     """经典周期图 + Welch 平均，双对数坐标给出周期与功率。"""
     arr = _prepare(values)
     n = arr.size
-    series = _detrend(arr, detrend)
-    if window == "hann":
-        series = series * signal.windows.hann(n, sym=False)
-
-    freqs, power = signal.periodogram(series, fs=1.0 / dt, window="boxcar", detrend=False)
-    mask = freqs > 0
+    # 计算 Periodogram
+    freqs, power = signal.periodogram(arr, fs=1.0/dt)
+    mask = (freqs >= 1.0/max_periods) & (freqs <= 1.0/min_periods)
     freqs, power = freqs[mask], power[mask]
     if freqs.size == 0:
         raise AnalysisError("序列过短，无法计算功率谱")
+    lag1 = calculate_ar1_coefficient(arr)
+    periods = 1 / freqs
+    # 计算红噪声模型的期望功率谱
+    red_noise_psd = (1 - lag1**2) / (1 - 2 * lag1 *
+                                     np.cos(2 * np.pi * freqs) + lag1**2)
+    red_noise_psd *= np.mean(power) / np.mean(red_noise_psd)  # 标准化红噪声谱
 
-    # 红噪声显著性阈值（AR(1) 基准）
-    lag1 = float(np.corrcoef(arr[:-1], arr[1:])[0, 1]) if n > 2 else 0.0
-    lag1 = min(max(lag1, 0.0), 0.95)
-    dof = 2
-    red = _red_noise_threshold(freqs, power, lag1, dof)
-
-    order = np.argsort(freqs)
-    freqs, power, red = freqs[order], power[order], red[order]
-
-    # 抽稀，保证前端图表不至于过密
-    if freqs.size > max_periods:
-        step = int(math.ceil(freqs.size / max_periods))
-        freqs, power, red = freqs[::step], power[::step], red[::step]
-
-    periods = 1.0 / freqs
+    # 计算显著性水平
+    chi2_threshold = stats.chi2.ppf(0.95, 2) / 2  # 2 自由度
+    significance_level = red_noise_psd * chi2_threshold
     return {
         "type": "power-spectrum",
         "n": int(n),
         "dt": float(dt),
         "detrend": detrend,
-        "window": window,
         "frequency": [jsonable(v) for v in freqs.tolist()],
         "period": [jsonable(v) for v in periods.tolist()],
         "power": [jsonable(v) for v in power.tolist()],
-        "threshold": [jsonable(v) for v in red.tolist()],
-        "peaks": _top_periods(periods, power, red, top=6),
+        "threshold": [jsonable(v) for v in significance_level.tolist()],
+        "peaks": _top_periods(periods, power, significance_level, top=6),
         "meta": {"lag1": lag1, "confidence": 0.95},
     }
 
 
-def _red_noise_threshold(freqs: np.ndarray, power: np.ndarray, lag1: float, dof: int) -> np.ndarray:
-    """基于 AR(1) 红噪声谱的 95% 显著性阈值（Torrence & Compo, 1998）。"""
-    mean_power = float(np.mean(power))
-    base = mean_power * (1.0 - lag1**2) / (1.0 + lag1**2 - 2.0 * lag1 * np.cos(2.0 * np.pi * freqs))
-    chi2 = stats.chi2.ppf(0.95, dof) / dof
-    return base * chi2
+# periodogram方法的功率谱计算,用于计算ar1（时间序列的一阶自相关系数）
+def calculate_ar1_coefficient(time_series):
+    """
+    使用自相关系数法计算 AR(1) 模型的系数 alpha
+    :param time_series: 输入的时间序列
+    :return: AR(1) 系数 lag1
+    """
+    time_series = np.asarray(time_series)
+    n = len(time_series)
+    mean = np.mean(time_series)
+    var_0 = np.sum((time_series - mean) ** 2) / n
+    cov_1 = np.sum((time_series[:-1] - mean) *
+                   (time_series[1:] - mean)) / (n - 1)
+    autocorr_1 = cov_1 / var_0
+    return autocorr_1
 
 
-def _top_periods(periods: np.ndarray, power: np.ndarray, threshold: np.ndarray, top: int = 6) -> list[dict]:
-    if power.size == 0:
-        return []
-    idx = np.argsort(power)[::-1][: max(top * 4, 12)]
+def _top_periods(periods: np.ndarray, power: np.ndarray, threshold: np.ndarray, top: int = 6,) -> list[dict]:
+    candidate_limit = max(top * 4, 12)
+    # 1. 划分显著与非显著点索引
+    is_sig = power >= threshold
+    sig_indices = np.where(is_sig)[0]
+    nonsig_indices = np.where(~is_sig)[0]
+    # 2. 各自按功率从大到小排序
+    sig_sorted = sig_indices[np.argsort(power[sig_indices])[::-1]]
+    nonsig_sorted = nonsig_indices[np.argsort(power[nonsig_indices])[::-1]]
+    # 3. 候选池筛选：先显著周期，不足 top * 4 时用非显著周期的最大功率补充
+    if len(sig_sorted) >= candidate_limit:
+        candidate_indices = sig_sorted[:candidate_limit]
+    else:
+        needed = candidate_limit - len(sig_sorted)
+        candidate_indices = np.concatenate(
+            [sig_sorted, nonsig_sorted[:needed]])
+    # 4. 遍历候选集（先显著再非显著，且各自按功率降序排列），进行邻近去重
     peaks: list[dict] = []
     seen: list[float] = []
-    for i in idx:
+
+    for i in candidate_indices:
         p = float(periods[i])
-        if any(abs(math.log(p) - math.log(s)) < 0.08 for s in seen):
+        # 避免邻近相似周期重复选取（对数距离小于 0.1）
+        if any(abs(math.log(p) - math.log(s)) < 0.1 for s in seen):
             continue
+
         seen.append(p)
         peaks.append(
             {
                 "period": p,
                 "power": float(power[i]),
                 "threshold": float(threshold[i]),
-                "significant": bool(power[i] > threshold[i]),
+                "significant": bool(power[i] >= threshold[i]),
             }
         )
+
         if len(peaks) >= top:
             break
+
     return peaks
 
 
@@ -137,10 +154,12 @@ def wavelet_analysis(
     # 若 scipy 提供 morlet2 则使用，否则回退到复 Morlet
     mother = None
     try:  # SciPy < 1.15
-        from scipy.signal import morlet2 as mother  # type: ignore[attr-defined]
+        # type: ignore[attr-defined]
+        from scipy.signal import morlet2 as mother
     except ImportError:
         try:  # SciPy >= 1.15 移到了 windows 子模块
-            from scipy.signal.windows import morlet2 as mother  # type: ignore[attr-defined]
+            # type: ignore[attr-defined]
+            from scipy.signal.windows import morlet2 as mother
         except ImportError:  # pragma: no cover
             mother = None
 
@@ -186,10 +205,11 @@ def _manual_cwt(series: np.ndarray, widths: np.ndarray) -> np.ndarray:  # pragma
     for i, width in enumerate(widths):
         half = int(3 * width)
         t = np.arange(-half, half + 1)
-        wavelet = np.exp(2j * np.pi * t / width) * np.exp(-(t**2) / (2 * width**2))
+        wavelet = np.exp(2j * np.pi * t / width) * \
+            np.exp(-(t**2) / (2 * width**2))
         full = np.convolve(series, wavelet, mode="full")
         start = half
-        out[i] = full[start : start + n]
+        out[i] = full[start: start + n]
     return out
 
 
@@ -262,7 +282,8 @@ def _acf_peaks(acf: np.ndarray, dt: float) -> list[dict]:
     conf = 1.96 / math.sqrt(max(2, acf.size))
     for i in range(2, acf.size - 1):
         if acf[i] > acf[i - 1] and acf[i] > acf[i + 1] and acf[i] > 0.1:
-            peaks.append({"lag": float(i * dt), "value": float(acf[i]), "significant": bool(acf[i] > conf)})
+            peaks.append({"lag": float(
+                i * dt), "value": float(acf[i]), "significant": bool(acf[i] > conf)})
     peaks.sort(key=lambda item: item["value"], reverse=True)
     return peaks[:5]
 
@@ -284,7 +305,7 @@ def _burg_psd(series: np.ndarray, order: int, dt: float) -> tuple[np.ndarray, np
 
     for m in range(1, order + 1):
         ef_seg = ef[m:n]
-        eb_seg = eb[m - 1 : n - 1]
+        eb_seg = eb[m - 1: n - 1]
         den = float(np.dot(ef_seg, ef_seg) + np.dot(eb_seg, eb_seg))
         num = -2.0 * float(np.dot(ef_seg, eb_seg))
         k = num / den if den > 0 else 0.0
@@ -300,8 +321,8 @@ def _burg_psd(series: np.ndarray, order: int, dt: float) -> tuple[np.ndarray, np
         if m < order:
             ef_new = ef.copy()
             eb_new = eb.copy()
-            ef_new[m:n] = ef[m:n] + k * eb[m - 1 : n - 1]
-            eb_new[m:n] = eb[m - 1 : n - 1] + k * ef[m:n]
+            ef_new[m:n] = ef[m:n] + k * eb[m - 1: n - 1]
+            eb_new[m:n] = eb[m - 1: n - 1] + k * ef[m:n]
             ef, eb = ef_new, eb_new
 
     power = max(power, 1e-18)
@@ -324,7 +345,8 @@ def abrupt_change(
     arr = _prepare(values)
     n = arr.size
     method = (method or "mann-kendall").lower()
-    result: dict[str, Any] = {"type": "abrupt-change", "method": method, "n": int(n)}
+    result: dict[str, Any] = {
+        "type": "abrupt-change", "method": method, "n": int(n)}
 
     if method in ("mann-kendall", "mk", "all"):
         result["mann_kendall"] = _mann_kendall(arr)
@@ -346,17 +368,20 @@ def _mann_kendall(arr: np.ndarray) -> dict[str, Any]:
         s[k] = s[k - 1] + np.sum(np.sign(arr[k] - arr[:k]))
     var = np.array([k * (k + 1) * (2 * k + 5) / 72.0 for k in range(n)])
     with np.errstate(divide="ignore", invalid="ignore"):
-        uf = np.where(var > 0, (s - np.array([k * (k - 1) / 4.0 for k in range(n)])) / np.sqrt(var), 0.0)
+        uf = np.where(
+            var > 0, (s - np.array([k * (k - 1) / 4.0 for k in range(n)])) / np.sqrt(var), 0.0)
     rev = arr[::-1]
     s2 = np.zeros(n)
     for k in range(1, n):
         s2[k] = s2[k - 1] + np.sum(np.sign(rev[k] - rev[:k]))
     with np.errstate(divide="ignore", invalid="ignore"):
-        ub_rev = np.where(var > 0, (s2 - np.array([k * (k - 1) / 4.0 for k in range(n)])) / np.sqrt(var), 0.0)
+        ub_rev = np.where(
+            var > 0, (s2 - np.array([k * (k - 1) / 4.0 for k in range(n)])) / np.sqrt(var), 0.0)
     ub = ub_rev[::-1]
 
     critical = 1.96
-    crossings = [i for i in range(1, n) if (uf[i - 1] - critical) * (uf[i] - critical) < 0]
+    crossings = [i for i in range(1, n) if (
+        uf[i - 1] - critical) * (uf[i] - critical) < 0]
     return {
         "uf": [jsonable(v) for v in uf.tolist()],
         "ub": [jsonable(v) for v in ub.tolist()],
@@ -372,8 +397,8 @@ def _sliding_t(arr: np.ndarray, window: int) -> dict[str, Any]:
     window = int(max(3, min(window, n // 2)))
     stats_out: list[float | None] = []
     for i in range(window, n - window + 1):
-        a = arr[i - window : i]
-        b = arr[i : i + window]
+        a = arr[i - window: i]
+        b = arr[i: i + window]
         va, vb = float(np.var(a, ddof=1)), float(np.var(b, ddof=1))
         denom = math.sqrt(va / window + vb / window)
         if denom == 0:
@@ -381,7 +406,8 @@ def _sliding_t(arr: np.ndarray, window: int) -> dict[str, Any]:
             continue
         stats_out.append(float((a.mean() - b.mean()) / denom))
 
-    finite = [(i + window, v) for i, v in enumerate(stats_out) if v is not None]
+    finite = [(i + window, v)
+              for i, v in enumerate(stats_out) if v is not None]
     critical = float(stats.t.ppf(0.975, 2 * window - 2))
     extremes = sorted(finite, key=lambda item: abs(item[1]), reverse=True)[:6]
     return {
@@ -429,9 +455,12 @@ def cross_spectrum(
     noverlap = seg // 2
     if n < seg:
         seg, noverlap = n, 0
-    freqs, pxx = signal.welch(a, fs=1.0 / dt, nperseg=seg, noverlap=noverlap, detrend=False)
-    _, pyy = signal.welch(b, fs=1.0 / dt, nperseg=seg, noverlap=noverlap, detrend=False)
-    _, pxy = signal.csd(a, b, fs=1.0 / dt, nperseg=seg, noverlap=noverlap, detrend=False)
+    freqs, pxx = signal.welch(
+        a, fs=1.0 / dt, nperseg=seg, noverlap=noverlap, detrend=False)
+    _, pyy = signal.welch(b, fs=1.0 / dt, nperseg=seg,
+                          noverlap=noverlap, detrend=False)
+    _, pxy = signal.csd(a, b, fs=1.0 / dt, nperseg=seg,
+                        noverlap=noverlap, detrend=False)
 
     mask = freqs > 0
     freqs = freqs[mask]
@@ -443,7 +472,8 @@ def cross_spectrum(
 
     if freqs.size > max_periods:
         step = int(math.ceil(freqs.size / max_periods))
-        freqs, coherence, phase, coh_phase = freqs[::step], coherence[::step], phase[::step], coh_phase[::step]
+        freqs, coherence, phase, coh_phase = freqs[::
+                                                   step], coherence[::step], phase[::step], coh_phase[::step]
 
     periods = 1.0 / freqs
     r, p_value = stats.pearsonr(a, b)
@@ -489,7 +519,8 @@ def eemd_decompose(
             accum[i] += imf
             counts[i] += 1
 
-    imfs = [accum[i] / max(counts[i], 1) for i in range(max_imfs) if counts[i] > 0]
+    imfs = [accum[i] / max(counts[i], 1)
+            for i in range(max_imfs) if counts[i] > 0]
     residue = arr - np.sum(imfs, axis=0)
     variances = [float(np.var(imf)) for imf in imfs]
     total = sum(variances) or 1.0
@@ -640,7 +671,8 @@ def compare_series(
                 row.append(1.0)
                 continue
             try:
-                row.append(float(np.corrcoef(prepared[name_a], prepared[name_b])[0, 1]))
+                row.append(
+                    float(np.corrcoef(prepared[name_a], prepared[name_b])[0, 1]))
             except Exception:
                 row.append(None)
         matrix.append(row)
@@ -649,7 +681,8 @@ def compare_series(
     for name, arr in prepared.items():
         if normalize:
             std = float(np.std(arr)) or 1.0
-            curves[name] = [jsonable(v) for v in ((arr - arr.mean()) / std).tolist()]
+            curves[name] = [jsonable(v) for v in (
+                (arr - arr.mean()) / std).tolist()]
         else:
             curves[name] = [jsonable(v) for v in arr.tolist()]
 

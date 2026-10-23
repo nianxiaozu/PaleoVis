@@ -27,6 +27,7 @@ data/temp/
 .chrome-cdp/
 .chrome-*/
 .dsh/
+._backups/
 
 # 数据文件：示例数据随仓库分发，其余忽略
 data/*.nc

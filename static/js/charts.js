@@ -184,7 +184,7 @@
             y: y + 4,
             "text-anchor": "end",
             fill: T.PALETTE.muted,
-            "font-size": 10,
+            "font-size": 14,
             "font-family": "ui-monospace, Menlo, Consolas, monospace",
           },
           cfg.yFormat ? cfg.yFormat(tick) : fmt(tick),
@@ -216,7 +216,7 @@
             y: margin.top + plotH + 17,
             "text-anchor": "middle",
             fill: T.PALETTE.muted,
-            "font-size": 10,
+            "font-size": 14,
           },
           cfg.xFormat ? cfg.xFormat(label) : T.FORMAT.timeLabel(label),
         ),
@@ -268,7 +268,7 @@
               x: x + 4,
               y: margin.top + 12,
               fill: marker.color || T.PALETTE.danger,
-              "font-size": 10,
+              "font-size": 16,
             },
             marker.label,
           ),
@@ -348,7 +348,7 @@
         const label = s.name || "序列 " + (si + 1);
         const w = label.length * 7 + 22;
         svg.appendChild(node("line", { x1: lx, y1: 16, x2: lx + 14, y2: 16, stroke: color, "stroke-width": 2 }));
-        svg.appendChild(node("text", { x: lx + 19, y: 19, fill: T.PALETTE.text, "font-size": 10 }, label));
+        svg.appendChild(node("text", { x: lx + 19, y: 19, fill: T.PALETTE.text, "font-size": 14 }, label));
         lx += w;
       });
     }
@@ -363,7 +363,7 @@
             y: 16,
             "text-anchor": "middle",
             fill: T.PALETTE.text,
-            "font-size": 12,
+            "font-size": 16,
             "font-weight": 600,
           },
           cfg.title,
@@ -379,7 +379,7 @@
             y: margin.top + plotH / 2,
             "text-anchor": "middle",
             fill: T.PALETTE.muted,
-            "font-size": 10,
+            "font-size": 16,
             transform:
               "rotate(-90 12 " + (margin.top + plotH / 2) + ")",
           },
@@ -516,14 +516,14 @@
       const y = yOf(tick);
       svg.appendChild(node("line", { x1: margin.left, y1: y, x2: margin.left + plotW, y2: y, stroke: T.PALETTE.grid, "stroke-dasharray": "3 3" }));
       svg.appendChild(
-        node("text", { x: margin.left - 8, y: y + 4, "text-anchor": "end", fill: T.PALETTE.muted, "font-size": 10 }, fmt(tick)),
+        node("text", { x: margin.left - 8, y: y + 4, "text-anchor": "end", fill: T.PALETTE.muted, "font-size": 14 }, fmt(tick)),
       );
     });
     niceTicks(xMin - padX, xMax + padX, 5).forEach((tick) => {
       const x = xOf(tick);
       svg.appendChild(node("line", { x1: x, y1: margin.top + plotH, x2: x, y2: margin.top + plotH + 4, stroke: T.PALETTE.axis }));
       svg.appendChild(
-        node("text", { x: x, y: margin.top + plotH + 17, "text-anchor": "middle", fill: T.PALETTE.muted, "font-size": 10 }, fmt(tick)),
+        node("text", { x: x, y: margin.top + plotH + 17, "text-anchor": "middle", fill: T.PALETTE.muted, "font-size": 14 }, fmt(tick)),
       );
     });
 
@@ -560,19 +560,19 @@
 
     if (cfg.title) {
       svg.appendChild(
-        node("text", { x: margin.left + plotW / 2, y: 16, "text-anchor": "middle", fill: T.PALETTE.text, "font-size": 12, "font-weight": 600 }, cfg.title),
+        node("text", { x: margin.left + plotW / 2, y: 16, "text-anchor": "middle", fill: T.PALETTE.text, "font-size": 16, "font-weight": 600 }, cfg.title),
       );
     }
     if (cfg.xLabel) {
       svg.appendChild(
-        node("text", { x: margin.left + plotW / 2, y: height - 6, "text-anchor": "middle", fill: T.PALETTE.muted, "font-size": 10 }, cfg.xLabel),
+        node("text", { x: margin.left + plotW / 2, y: height - 6, "text-anchor": "middle", fill: T.PALETTE.muted, "font-size": 16 }, cfg.xLabel),
       );
     }
     if (cfg.yLabel) {
       svg.appendChild(
         node(
           "text",
-          { x: 12, y: margin.top + plotH / 2, "text-anchor": "middle", fill: T.PALETTE.muted, "font-size": 10, transform: "rotate(-90 12 " + (margin.top + plotH / 2) + ")" },
+          { x: 12, y: margin.top + plotH / 2, "text-anchor": "middle", fill: T.PALETTE.muted, "font-size": 16, transform: "rotate(-90 12 " + (margin.top + plotH / 2) + ")" },
           cfg.yLabel,
         ),
       );

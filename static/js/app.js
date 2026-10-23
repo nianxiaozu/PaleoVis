@@ -1354,7 +1354,7 @@
         "该位置在当前时段内没有有效数据，请换一个经纬度或调整时间范围";
       container.innerHTML =
         '<div class="chart-view">' +
-        preprocessPanelHtml(pre) +
+        renderPreprocessPanel(pre) +
         '<div class="chart-empty">' +
         '<svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="#cbd5e1" stroke-width="1.5">' +
         '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>' +
@@ -1388,7 +1388,7 @@
 
     container.innerHTML =
       '<div class="chart-view">' +
-      preprocessPanelHtml(pre) +
+      renderPreprocessPanel(pre) +
       '<div class="metric-row">' +
       metric("变量", data.variable + (data.units ? " (" + data.units + ")" : "")) +
       metric("样本数", values.length) +
@@ -1432,78 +1432,6 @@
     return data.variable + " 区域平均序列";
   }
 
-  /** 预处理面板：去趋势 / 标准化 / 滤波。 */
-  function preprocessPanelHtml(pre) {
-    const p = state.preprocess;
-    const applied = pre && pre.applied;
-    const steps = (pre && pre.steps) || [];
-    const filterOn = p.filter && p.filter !== "none";
-    const needMin = p.filter === "lowpass" || p.filter === "bandpass";
-    const needMax = p.filter === "highpass" || p.filter === "bandpass";
-
-    return (
-      '<section class="preprocess-panel">' +
-      '<header class="preprocess-head">' +
-      "<h3>序列预处理</h3>" +
-      (applied
-        ? '<span class="pre-badge on">已应用：' + T.esc(steps.join(" · ")) + "</span>"
-        : '<span class="pre-badge">未启用</span>') +
-      "</header>" +
-      '<div class="preprocess-body">' +
-      // 去趋势
-      '<div class="pre-field">' +
-      '<label for="preDetrend">去趋势</label>' +
-      '<select id="preDetrend">' +
-      '<option value="none"' + (p.detrend === "none" ? " selected" : "") + ">不处理</option>" +
-      '<option value="linear"' + (p.detrend === "linear" ? " selected" : "") + ">线性去趋势</option>" +
-      '<option value="mean"' + (p.detrend === "mean" ? " selected" : "") + ">去均值</option>" +
-      "</select>" +
-      "</div>" +
-      // 标准化
-      '<div class="pre-field">' +
-      '<label for="preStandardize">标准化</label>' +
-      '<label class="pre-switch">' +
-      '<input type="checkbox" id="preStandardize"' + (p.standardize ? " checked" : "") + " />" +
-      "<span>z-score（均值 0，标准差 1）</span>" +
-      "</label>" +
-      "</div>" +
-      // 滤波
-      '<div class="pre-field">' +
-      '<label for="preFilter">滤波</label>' +
-      '<select id="preFilter">' +
-      '<option value="none"' + (!filterOn ? " selected" : "") + ">不滤波</option>" +
-      '<option value="lowpass"' + (p.filter === "lowpass" ? " selected" : "") + ">低通（保留长周期）</option>" +
-      '<option value="highpass"' + (p.filter === "highpass" ? " selected" : "") + ">高通（保留短周期）</option>" +
-      '<option value="bandpass"' + (p.filter === "bandpass" ? " selected" : "") + ">带通（保留指定周期段）</option>" +
-      "</select>" +
-      "</div>" +
-      // 滤波时段
-      '<div class="pre-field pre-periods"' + (filterOn ? "" : ' style="display:none"') + ">" +
-      '<label>滤波时段（周期，与时间轴同单位）</label>' +
-      '<div class="pre-period-row">' +
-      (needMin
-        ? '<input type="number" id="prePeriodMin" min="0" step="0.5" placeholder="最短周期" value="' +
-        (p.filter_period_min || "") + '" />'
-        : "") +
-      (needMax
-        ? '<input type="number" id="prePeriodMax" min="0" step="0.5" placeholder="最长周期" value="' +
-        (p.filter_period_max || "") + '" />'
-        : "") +
-      '<label>阶数:</label>' +
-      '<input type="number" id="preOrder" min="1" max="8" step="1" title="Butterworth 阶数" value="' +
-      (p.order || 4) +
-      '" />' +
-      "</div>" +
-      "</div>" +
-      // 操作
-      '<div class="pre-actions">' +
-      '<button class="btn-primary pre-apply" id="preApplyBtn">应用预处理</button>' +
-      '<button class="pre-reset" id="preResetBtn">重置</button>' +
-      "</div>" +
-      "</div>" +
-      "</section>"
-    );
-  }
 
   function bindPreprocessPanel() {
     const detrendEl = document.getElementById("preDetrend");
@@ -1519,11 +1447,17 @@
       // 重新渲染面板以显示对应的输入框
       const panel = document.querySelector(".preprocess-panel");
       if (panel) {
-        panel.outerHTML = preprocessPanelHtml(state.series && state.series.preprocess);
+        panel.outerHTML = renderPreprocessPanel(state.series && state.series.preprocess);
         bindPreprocessPanel();
       }
     });
 
+    detrendEl.addEventListener("change", () => {
+      state.preprocess.detrend = detrendEl.value;
+    })
+    stdEl.addEventListener("click", () => {
+      state.preprocess.standardize = stdEl.checked;
+    })
     applyBtn.addEventListener("click", async () => {
       state.preprocess.detrend = detrendEl.value;
       state.preprocess.standardize = stdEl.checked;
@@ -1742,6 +1676,78 @@
         else refreshMapField(true);
       });
     }
+  }
+
+  //--------------------------------------------图表视图预处理面板
+  function renderPreprocessPanel(pre) {
+    const p = state.preprocess;
+    const applied = pre && pre.applied;
+    const steps = (pre && pre.steps) || [];
+    const filterOn = p.filter && p.filter !== "none";
+    const needMin = p.filter === "lowpass" || p.filter === "bandpass";
+    const needMax = p.filter === "highpass" || p.filter === "bandpass";
+    return (
+      '<section class="preprocess-panel">' +
+      '<header class="preprocess-head">' +
+      "<h3>序列预处理</h3>" +
+      (applied
+        ? '<span class="pre-badge on">已应用：' + T.esc(steps.join(" · ")) + "</span>"
+        : '<span class="pre-badge">未启用</span>') +
+      "</header>" +
+      '<div class="preprocess-body">' +
+      // 去趋势
+      '<div class="pre-field">' +
+      '<label for="preDetrend">去趋势</label>' +
+      '<select id="preDetrend">' +
+      '<option value="none"' + (p.detrend === "none" ? " selected" : "") + ">不处理</option>" +
+      '<option value="linear"' + (p.detrend === "linear" ? " selected" : "") + ">线性去趋势</option>" +
+      '<option value="mean"' + (p.detrend === "mean" ? " selected" : "") + ">去均值</option>" +
+      "</select>" +
+      "</div>" +
+      // 标准化
+      '<div class="pre-field">' +
+      '<label for="preStandardize">标准化</label>' +
+      '<label class="pre-switch">' +
+      '<input type="checkbox" id="preStandardize"' + (p.standardize ? " checked" : "") + " />" +
+      "<span>z-score（均值 0，标准差 1）</span>" +
+      "</label>" +
+      "</div>" +
+      // 滤波
+      '<div class="pre-field">' +
+      '<label for="preFilter">滤波</label>' +
+      '<select id="preFilter">' +
+      '<option value="none"' + (!filterOn ? " selected" : "") + ">不滤波</option>" +
+      '<option value="lowpass"' + (p.filter === "lowpass" ? " selected" : "") + ">低通（保留长周期）</option>" +
+      '<option value="highpass"' + (p.filter === "highpass" ? " selected" : "") + ">高通（保留短周期）</option>" +
+      '<option value="bandpass"' + (p.filter === "bandpass" ? " selected" : "") + ">带通（保留指定周期段）</option>" +
+      "</select>" +
+      "</div>" +
+      // 滤波时段
+      '<div class="pre-field pre-periods"' + (filterOn ? "" : ' style="display:none"') + ">" +
+      '<label>滤波时段（周期，与时间轴同单位）</label>' +
+      '<div class="pre-period-row">' +
+      (needMin
+        ? '<input type="number" id="prePeriodMin" min="0" step="0.5" placeholder="最短周期" value="' +
+        (p.filter_period_min || "") + '" />'
+        : "") +
+      (needMax
+        ? '<input type="number" id="prePeriodMax" min="0" step="0.5" placeholder="最长周期" value="' +
+        (p.filter_period_max || "") + '" />'
+        : "") +
+      '<label>阶数:</label>' +
+      '<input type="number" id="preOrder" min="1" max="8" step="1" title="Butterworth 阶数" value="' +
+      (p.order || 4) +
+      '" />' +
+      "</div>" +
+      "</div>" +
+      // 操作
+      '<div class="pre-actions">' +
+      '<button class="btn-primary pre-apply" id="preApplyBtn">应用预处理</button>' +
+      '<button class="pre-reset" id="preResetBtn">重置</button>' +
+      "</div>" +
+      "</div>" +
+      "</section>"
+    );
   }
 
   // ------------------------------------------------------------- 分析

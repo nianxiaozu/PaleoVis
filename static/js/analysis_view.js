@@ -51,31 +51,29 @@
         metrics([
           chip("样本数", data.n),
           chip("采样步长", T.FORMAT.number(data.source.dt, 3)),
-          chip("去趋势", data.detrend === "linear" ? "线性" : data.detrend === "mean" ? "去均值" : "无"),
           chip("主周期", best ? T.FORMAT.number(best.period, 2) : "—"),
-          chip("显著峰", String(peaks.filter((p) => p.significant).length), "accent"),
         ]) + chartBox("psChart"),
       ) +
       card(
         "显著周期",
         '<div class="table-wrap"><table class="data-table"><thead><tr><th>周期</th><th>功率</th><th>95% 阈值</th><th>显著性</th></tr></thead><tbody>' +
-          peaks
-            .map(
-              (p) =>
-                "<tr><td>" +
-                T.FORMAT.number(p.period, 3) +
-                "</td><td>" +
-                T.FORMAT.number(p.power, 4) +
-                "</td><td>" +
-                T.FORMAT.number(p.threshold, 4) +
-                "</td><td>" +
-                (p.significant
-                  ? '<span class="badge ok">显著</span>'
-                  : '<span class="badge">—</span>') +
-                "</td></tr>",
-            )
-            .join("") +
-          "</tbody></table></div>",
+        peaks
+          .map(
+            (p) =>
+              "<tr><td>" +
+              T.FORMAT.number(p.period, 3) +
+              "</td><td>" +
+              T.FORMAT.number(p.power, 4) +
+              "</td><td>" +
+              T.FORMAT.number(p.threshold, 4) +
+              "</td><td>" +
+              (p.significant
+                ? '<span class="badge ok">显著</span>'
+                : '<span class="badge">—</span>') +
+              "</td></tr>",
+          )
+          .join("") +
+        "</tbody></table></div>",
         '<span class="card-hint">红噪声 (AR1) 95% 置信水平</span>',
       );
 
@@ -108,8 +106,8 @@
           chip("主导周期", best ? T.FORMAT.number(best.period, 2) : "—"),
           chip("去趋势", data.detrend === "linear" ? "线性" : "无"),
         ]) +
-          chartBox("wvChart", "tall") +
-          '<p class="card-note">纵轴为周期（尺度 × 采样步长），颜色表示小波功率；黑线为影响锥边界，边界外结果受边缘效应影响。</p>',
+        chartBox("wvChart", "tall") +
+        '<p class="card-note">纵轴为周期（尺度 × 采样步长），颜色表示小波功率；黑线为影响锥边界，边界外结果受边缘效应影响。</p>',
       ) +
       card("全局小波谱", chartBox("wvGlobal"));
 
@@ -146,21 +144,21 @@
           chip("首选周期", peaks[0] ? T.FORMAT.number(peaks[0].period, 2) : "—"),
           chip("自相关阈值", T.FORMAT.number(data.acf.confidence, 3)),
         ]) +
-          '<div class="grid-2">' +
-          chartBox("pdAcf") +
-          chartBox("pdSpec") +
-          "</div>",
+        '<div class="grid-2">' +
+        chartBox("pdAcf") +
+        chartBox("pdSpec") +
+        "</div>",
       ) +
       card(
         "识别到的周期",
         '<div class="table-wrap"><table class="data-table"><thead><tr><th>周期</th><th>谱峰强度</th></tr></thead><tbody>' +
-          peaks
-            .map(
-              (p) =>
-                "<tr><td>" + T.FORMAT.number(p.period, 3) + "</td><td>" + T.FORMAT.number(p.power, 4) + "</td></tr>",
-            )
-            .join("") +
-          "</tbody></table></div>",
+        peaks
+          .map(
+            (p) =>
+              "<tr><td>" + T.FORMAT.number(p.period, 3) + "</td><td>" + T.FORMAT.number(p.power, 4) + "</td></tr>",
+          )
+          .join("") +
+        "</tbody></table></div>",
       );
 
     C.line(document.getElementById("pdAcf"), {
@@ -206,8 +204,8 @@
           chip("趋势", mk.trend, mk.trend === "不显著" ? "" : "accent"),
           chip("交叉点", mk.crossings.length),
         ]) +
-          '<div class="chart-box tall" id="mkChart"></div>' +
-          '<p class="card-note">UF 为顺序统计量，UB 为逆序统计量；二者在置信带 (±1.96) 内的交点即潜在突变年份。</p>',
+        '<div class="chart-box tall" id="mkChart"></div>' +
+        '<p class="card-note">UF 为顺序统计量，UB 为逆序统计量；二者在置信带 (±1.96) 内的交点即潜在突变年份。</p>',
       );
     }
     if (data.sliding_t) {
@@ -308,19 +306,19 @@
           chip("p 值", T.FORMAT.number(data.correlation.p, 4)),
           chip("样本数", data.n),
         ]) +
-          chartBox("csChart") +
-          chartBox("csPhase"),
+        chartBox("csChart") +
+        chartBox("csPhase"),
       ) +
       card(
         "高相干周期",
         '<div class="table-wrap"><table class="data-table"><thead><tr><th>周期</th><th>相干值</th></tr></thead><tbody>' +
-          peaks
-            .map(
-              (p) =>
-                "<tr><td>" + T.FORMAT.number(p.period, 3) + "</td><td>" + T.FORMAT.number(p.power, 4) + "</td></tr>",
-            )
-            .join("") +
-          "</tbody></table></div>",
+        peaks
+          .map(
+            (p) =>
+              "<tr><td>" + T.FORMAT.number(p.period, 3) + "</td><td>" + T.FORMAT.number(p.power, 4) + "</td></tr>",
+          )
+          .join("") +
+        "</tbody></table></div>",
       );
 
     C.line(document.getElementById("csChart"), {
@@ -349,11 +347,11 @@
           card(
             "IMF " + (i + 1),
             '<div class="chart-box compact" id="imf-' +
-              i +
-              '"></div>' +
-              '<span class="card-hint">方差贡献 ' +
-              T.FORMAT.number((data.variance_ratio[i] || 0) * 100, 1) +
-              "%</span>",
+            i +
+            '"></div>' +
+            '<span class="card-hint">方差贡献 ' +
+            T.FORMAT.number((data.variance_ratio[i] || 0) * 100, 1) +
+            "%</span>",
           ),
       )
       .join("");
@@ -367,7 +365,7 @@
           chip("噪声比", data.meta.noise),
           chip("集合次数", data.meta.trials),
         ]) +
-          '<div class="chart-box" id="eemdOriginal"></div>',
+        '<div class="chart-box" id="eemdOriginal"></div>',
       ) +
       '<div class="imf-grid">' +
       blocks +
@@ -413,10 +411,10 @@
           chip("强度", strength + direction + "相关"),
           chip("最佳滞后", best ? best[0] + " (" + T.FORMAT.number(best[1], 3) + ")" : "—"),
         ]) +
-          '<div class="grid-2">' +
-          chartBox("corrScatter") +
-          chartBox("corrLag") +
-          "</div>",
+        '<div class="grid-2">' +
+        chartBox("corrScatter") +
+        chartBox("corrLag") +
+        "</div>",
       );
 
     C.scatter(document.getElementById("corrScatter"), {
@@ -457,8 +455,8 @@
           chip("公共长度", data.n),
           chip("标准化", data.normalize ? "是" : "否"),
         ]) +
-          '<div class="chart-box tall" id="cmpChart"></div>' +
-          '<div class="legend-row" id="cmpLegend"></div>',
+        '<div class="chart-box tall" id="cmpChart"></div>' +
+        '<div class="legend-row" id="cmpLegend"></div>',
       ) +
       card(
         "相关矩阵",
@@ -467,27 +465,27 @@
       card(
         "统计摘要",
         '<div class="table-wrap"><table class="data-table"><thead><tr><th>序列</th><th>均值</th><th>标准差</th><th>最小</th><th>最大</th><th>样本数</th></tr></thead><tbody>' +
-          labels
-            .map((name) => {
-              const s = data.summary[name] || {};
-              return (
-                "<tr><td>" +
-                T.esc(name) +
-                "</td><td>" +
-                T.FORMAT.number(s.mean, 3) +
-                "</td><td>" +
-                T.FORMAT.number(s.std, 3) +
-                "</td><td>" +
-                T.FORMAT.number(s.min, 3) +
-                "</td><td>" +
-                T.FORMAT.number(s.max, 3) +
-                "</td><td>" +
-                s.n +
-                "</td></tr>"
-              );
-            })
-            .join("") +
-          "</tbody></table></div>",
+        labels
+          .map((name) => {
+            const s = data.summary[name] || {};
+            return (
+              "<tr><td>" +
+              T.esc(name) +
+              "</td><td>" +
+              T.FORMAT.number(s.mean, 3) +
+              "</td><td>" +
+              T.FORMAT.number(s.std, 3) +
+              "</td><td>" +
+              T.FORMAT.number(s.min, 3) +
+              "</td><td>" +
+              T.FORMAT.number(s.max, 3) +
+              "</td><td>" +
+              s.n +
+              "</td></tr>"
+            );
+          })
+          .join("") +
+        "</tbody></table></div>",
       );
 
     C.line(document.getElementById("cmpChart"), {
