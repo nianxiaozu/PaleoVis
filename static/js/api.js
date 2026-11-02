@@ -460,6 +460,12 @@
       variable_a: null,
       /** 第二个变量名 */
       variable_b: null,
+      /** 多序列对比追加的「数据 - 变量」组合（第 3 条起） */
+      extras: [],
+      /** 交叉谱显示的最长周期；null 表示取全部频段 */
+      max_period: null,
+      /** 交叉谱 X 轴刻度："linear" | "log"（只影响绘图） */
+      xScale: "linear",
     };
   };
 
@@ -478,7 +484,24 @@
     if (p.file_b) out.file_b = p.file_b;
     if (p.variable_a) out.variable_a = p.variable_a;
     if (p.variable_b) out.variable_b = p.variable_b;
+    const extras = (p.extras || [])
+      .filter((e) => e && (e.file || e.variable))
+      .map((e) => {
+        const item = {};
+        if (e.file) item.file = e.file;
+        if (e.variable) item.variable = e.variable;
+        return item;
+      });
+    if (extras.length) out.extras = extras;
     return Object.assign(out, extra || {});
+  };
+
+  /** 交叉谱的计算参数（最长周期），显示参数 xScale 留在前端。 */
+  state.crossBody = function (extra) {
+    const p = state.pair || state.pairDefaults();
+    const out = {};
+    if (p.max_period) out.max_period = Number(p.max_period);
+    return state.pairBody(Object.assign(out, extra || {}));
   };
 
   /** 文件 id -> 变量元数据数组，供跨文件分析的文件下拉联动（按需懒加载）。 */

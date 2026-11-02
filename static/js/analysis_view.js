@@ -507,6 +507,7 @@
       (panel && panel.renderVariablePanel ? panel.renderVariablePanel(data, {
         title: "交叉谱分析",
         badge: "两个数据 · 相位/相干",
+        crossOpts: true,
       }) : "") +
       card(
         "交叉谱分析",
@@ -533,12 +534,15 @@
         "</tbody></table></div>",
       );
 
+    const pairState = global.PaleoState || {};
+    const xScale = (pairState.pair && pairState.pair.xScale) || "linear";
     C.line(document.getElementById("csChart"), {
       title: "相干谱",
       series: [{ name: "相干值", values: data.coherence, color: T.PALETTE.primary, area: true }],
       xValues: data.period,
       xLabels: data.period.map((v) => T.FORMAT.number(v, 1)),
       xFormat: (v) => T.FORMAT.number(v, 1),
+      xScale: xScale,
       yLabel: "Coherence",
     });
     C.line(document.getElementById("csPhase"), {
@@ -547,12 +551,14 @@
       xValues: data.period,
       xLabels: data.period.map((v) => T.FORMAT.number(v, 1)),
       xFormat: (v) => T.FORMAT.number(v, 1),
+      xScale: xScale,
       yLabel: "相位 (°)",
     });
 
     if (panel && panel.bindVariablePanel)
       panel.bindVariablePanel({
         title: "交叉谱分析",
+        crossOpts: true,
       });
   }
 

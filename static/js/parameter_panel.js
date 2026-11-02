@@ -1023,8 +1023,11 @@
       .catch(() => []);
   }
 
-  /** 把变量下拉的选项补齐（优先保留 preferred，其次保留用户已选值，最后取第一项）。 */
-  function fillVarSelect(varId, fileId, preferred) {
+  /**
+   * 把变量下拉的选项补齐（优先保留 preferred，其次保留用户已选值，
+   * 再挑一个不在 avoid 里的变量，最后取第一项）。
+   */
+  function fillVarSelect(varId, fileId, preferred, avoid) {
     const el = document.getElementById(varId);
     if (!el) return Promise.resolve();
     return ensureVariables(fileId).then((vars) => {
@@ -1032,19 +1035,62 @@
       if (!target || !vars.length) return;
       const keep = target.value;
       const candidates = [preferred, keep].filter(Boolean);
+      const blocked = avoid || [];
       let next = "";
       for (let i = 0; i < candidates.length && !next; i += 1) {
         if (vars.some((v) => v.name === candidates[i])) next = candidates[i];
       }
-      if (!next) next = vars[0].name;
+      if (!next) {
+        const free = vars.find((v) => blocked.indexOf(v.name) < 0);
+        next = (free && free.name) || vars[0].name;
+      }
       target.innerHTML = variableOptions(vars, next);
     });
+  }
+
+  /**
+   * 多序列对比里「再加一个组合」的按钮（放在最后一个盒子的右侧）。
+   * standalone=true 表示这个盒子里没有「✕」，按钮自己负责靠右。
+   */
+  function addButtonHtml(standalone) {
+    return (
+      '<button type="button" class="pre-add' +
+      (standalone ? " pre-add-tail" : "") +
+      '" id="pairAddBtn" title="再加一个「数据 - 变量」组合">' +
+      '<span class="pre-add-icon">＋</span></button>'
+    );
+  }
+
+  /** 一个「数据 - 变量」盒子的 HTML；多序列对比时可带删除按钮。 */
+  function pairGroup(prefix, label, fileId, varId, file, variable, opts) {
+    const o = opts || {};
+    const files = visibleFiles();
+    const controls = [];
+    if (files.length >= 2) {
+      controls.push(field(label + " · 文件", fileSelect(fileId, file)));
+      controls.push(field(label + " · 变量", variableSelectOf(varId, file, variable)));
+    } else {
+      controls.push(field(label + " · 变量", variableSelectOf(varId, file, variable)));
+    }
+    const remove = o.removable
+      ? '<button type="button" class="pre-remove" data-remove="' +
+        T.esc(String(o.index)) +
+        '" title="删除这个组合">✕</button>'
+      : "";
+    return (
+      '<div class="pre-group" data-group="' + T.esc(prefix) + '">' +
+      controls.join("") +
+      remove +
+      (o.trailing || "") +
+      "</div>"
+    );
   }
 
   function renderPairPanel(data, opts) {
     const cfg = opts || {};
     const files = visibleFiles();
     const pair = state.pair || state.pairDefaults();
+    const multi = Boolean(cfg.multi);
     const fallbackFile = state.currentFileId || (files[0] && files[0].id) || "";
     const fileA = pair.file_a || fallbackFile;
     const fileB = pair.file_b || fileA;
@@ -1058,18 +1104,7 @@
       "";
 
     let body = "";
-    if (files.length >= 2) {
-      body +=
-        '<div class="pre-group">' +
-        field("数据 A · 文件", fileSelect("pairFileA", fileA)) +
-        field("数据 A · 变量", variableSelectOf("pairVarA", fileA, varA)) +
-        "</div>";
-      body +=
-        '<div class="pre-group">' +
-        field("数据 B · 文件", fileSelect("pairFileB", fileB)) +
-        field("数据 B · 变量", variableSelectOf("pairVarB", fileB, varB)) +
-        "</div>";
-    } else {
+    if (files.length < 2) {
       const only = files[0];
       body += field(
         "数据文件",
@@ -1077,18 +1112,100 @@
           T.esc(only ? fileLabel(only) : "尚未选择文件") +
           "</span>",
       );
-      body += field("变量 A", variableSelectOf("pairVarA", fileA, varA));
-      body += field("变量 B", variableSelectOf("pairVarB", fileB, varB));
+    }
+
+    body += pairGroup("A", "数据 A", "pairFileA", "pairVarA", fileA, varA);
+
+    // 数据 B 之后是用户追加的组合；「＋」永远贴在最后一个盒子的右侧
+    const groups = [
+      pairGroup("B", "数据 B", "pairFileB", "pairVarB", fileB, varB),
+    ];
+    if (multi) {
+      const extras = pair.extras || [];
+      // 已占用的「文件 + 变量」组合，追加的盒子默认挑一个还没用过的变量
+      const usedKeys = [fileA + "\u0000" + varA, fileB + "\u0000" + varB];
+      extras.forEach((extra, index) => {
+        const label = "数据 " + String.fromCharCode(67 + index);
+        const file = extra.file || fileA;
+        const vars = varsOf(file) || varsA;
+        let variable = extra.variable || "";
+        if (!variable) {
+          const free = vars.find(
+            (v) => usedKeys.indexOf(file + "\u0000" + v.name) < 0,
+          );
+          variable = (free && free.name) || (vars[0] && vars[0].name) || "";
+        }
+        usedKeys.push(file + "\u0000" + variable);
+        groups.push(
+          pairGroup(
+            "E" + index,
+            label,
+            "pairFileE" + index,
+            "pairVarE" + index,
+            file,
+            variable,
+            { removable: true, index: index },
+          ),
+        );
+      });
+    }
+    body += groups
+      .map((html, index) => {
+        if (!multi || index !== groups.length - 1) return html;
+        // 最后一个盒子里有「✕」时，按钮跟在「✕」后面；否则自己靠右
+        const standalone = index === 0;
+        return html.replace(/<\/div>$/, addButtonHtml(standalone) + "</div>");
+      })
+      .join("");
+    if (multi) {
+      body +=
+        '<div class="pre-add-row">' +
+        '<span class="pre-hint">点「＋」可继续追加组合，最多 8 个，时间轴自动取公共时段</span>' +
+        "</div>";
     }
 
     if (files.length >= 2) {
       body +=
-        '<p class="pre-static">分别选择两个「数据文件 + 变量」组合，两侧时间轴会自动对齐，只对公共时段做' +
-        T.esc(cfg.title || "双变量分析") + "。</p>";
+        '<p class="pre-static">' +
+        (multi
+          ? "每个盒子是一个「数据文件 + 变量」组合，可继续追加；所有序列的时间轴会自动对齐，只对公共时段做" +
+            T.esc(cfg.title || "对比") +
+            "。"
+          : "分别选择两个「数据文件 + 变量」组合，两侧时间轴会自动对齐，只对公共时段做" +
+            T.esc(cfg.title || "双变量分析") +
+            "。") +
+        "</p>";
     } else {
       body +=
         '<p class="pre-static">当前只有一个数据文件，请选择其中两个变量做' +
-        T.esc(cfg.title || "对比") + "，二者不能相同。</p>";
+        T.esc(cfg.title || "对比") +
+        (multi ? "（可点「＋」继续追加变量组合）" : "") +
+        "，二者不能相同。</p>";
+    }
+
+    if (cfg.crossOpts) {
+      body += field(
+        "最大周期",
+        numInput("pairMaxPeriod", pair.max_period, {
+          min: 0,
+          step: 1,
+          placeholder: "自动",
+        }),
+        "超过该周期的频段不显示，留空为全部频段",
+        "pre-narrow",
+      );
+      body += field(
+        "X 轴刻度",
+        select(
+          "pairXScale",
+          [
+            { value: "linear", label: "线性" },
+            { value: "log", label: "对数" },
+          ],
+          pair.xScale || "linear",
+        ),
+        "对数刻度便于观察宽周期段",
+      );
     }
 
     body += applyRow("pairApplyBtn", "应用并计算", "pairResetBtn");
@@ -1106,82 +1223,222 @@
     if (!applyBtn) return;
 
     const rerun = cfg.rerun === "compare" ? hooks.rerunCompare : hooks.rerunAnalysis;
-
-    // 文件切换后立刻补齐该文件的变量列表
     const pair = state.pair || state.pairDefaults();
-    const groups = [
-      ["pairFileA", "pairVarA", pair.variable_a],
-      ["pairFileB", "pairVarB", pair.variable_b],
-    ];
-    groups.forEach(([fileId, varId, preferred]) => {
+    const extras = pair.extras || [];
+
+    /** 文件下拉变化时刷新同名变量下拉；avoid 是同一文件里已被占用的变量名。 */
+    const wireGroup = (fileId, varId, preferred, fallbackFile, avoidOf) => {
       const sel = document.getElementById(fileId);
+      const avoid = avoidOf ? avoidOf() : null;
       if (!sel) {
         // 只有一个文件时没有文件下拉，直接用当前文件补齐变量
-        fillVarSelect(varId, pair.file_a || state.currentFileId, preferred);
+        fillVarSelect(varId, fallbackFile, preferred, avoid);
         return;
       }
-      fillVarSelect(varId, sel.value, preferred);
+      fillVarSelect(varId, sel.value, preferred, avoid);
       sel.addEventListener("change", () => {
         const target = document.getElementById(varId);
         if (target) target.innerHTML = '<option value="">加载中…</option>';
-        fillVarSelect(varId, sel.value, null);
+        const nextAvoid = avoidOf ? avoidOf() : null;
+        fillVarSelect(varId, sel.value, null, nextAvoid);
       });
+    };
+
+    /** 某个变量下拉当前选中的值（面板还没渲染出来时返回空串）。 */
+    const currentVar = (id) => {
+      const el = document.getElementById(id);
+      return (el && el.value) || "";
+    };
+    /** 某文件下已经用掉的变量名，用来给新增的盒子挑一个没被占用的变量。 */
+    const usedIn = (fileId, exceptVarId) => {
+      const names = [];
+      const collect = (fId, vId) => {
+        if (vId === exceptVarId) return;
+        const f = document.getElementById(fId);
+        const fValue = f ? f.value : fileId;
+        if (fValue === fileId) {
+          const name = currentVar(vId);
+          if (name) names.push(name);
+        }
+      };
+      collect("pairFileA", "pairVarA");
+      collect("pairFileB", "pairVarB");
+      extras.forEach((_, i) => collect("pairFileE" + i, "pairVarE" + i));
+      return names;
+    };
+
+    wireGroup("pairFileA", "pairVarA", pair.variable_a, pair.file_a || state.currentFileId);
+    wireGroup("pairFileB", "pairVarB", pair.variable_b, pair.file_b || pair.file_a || state.currentFileId);
+    extras.forEach((extra, index) => {
+      const varId = "pairVarE" + index;
+      const fileEl = document.getElementById("pairFileE" + index);
+      const targetFile = (fileEl && fileEl.value) || extra.file || pair.file_a || state.currentFileId;
+      wireGroup(
+        "pairFileE" + index,
+        varId,
+        extra.variable,
+        targetFile,
+        () => usedIn(targetFile, varId),
+      );
     });
+
+    /** 读出面板上所有「数据 - 变量」组合。 */
+    const readGroups = () => {
+      const fallbackFile = state.currentFileId || "";
+      const readOne = (fileId, varId) => {
+        const fileEl = document.getElementById(fileId);
+        const varEl = document.getElementById(varId);
+        return {
+          file: (fileEl && fileEl.value) || fallbackFile,
+          variable: varEl ? varEl.value : "",
+        };
+      };
+      return {
+        a: readOne("pairFileA", "pairVarA"),
+        b: readOne("pairFileB", "pairVarB"),
+        extras: extras.map((_, index) =>
+          readOne("pairFileE" + index, "pairVarE" + index),
+        ),
+      };
+    };
+
+    const rerender = () => {
+      const panel = document.getElementById("pairParamPanel");
+      if (!panel) return;
+      panel.outerHTML = renderPairPanel(null, cfg);
+      bindPairPanel(cfg);
+    };
+
+    // 多序列对比：➕ 追加一个组合
+    const addBtn = document.getElementById("pairAddBtn");
+    if (addBtn) {
+      addBtn.addEventListener("click", () => {
+        const current = readGroups();
+        const nextExtras = current.extras.slice();
+        // A + B + extras 最多 8 个组合
+        if (nextExtras.length >= 6) return toast("最多 8 个组合", "warn");
+        // 默认沿用数据 A 的文件，变量交给后端按顺序取
+        nextExtras.push({ file: current.a.file, variable: null });
+        state.pair = Object.assign({}, state.pair || state.pairDefaults(), {
+          file_a: current.a.file,
+          file_b: current.b.file,
+          variable_a: current.a.variable,
+          variable_b: current.b.variable,
+          extras: nextExtras,
+        });
+        rerender();
+      });
+    }
+
+    // 删除某个附加组合
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#pairParamPanel .pre-remove"),
+      (btn) => {
+        btn.addEventListener("click", () => {
+          const index = Number(btn.getAttribute("data-remove"));
+          const current = readGroups();
+          const nextExtras = current.extras.slice();
+          nextExtras.splice(index, 1);
+          state.pair = Object.assign({}, state.pair || state.pairDefaults(), {
+            file_a: current.a.file,
+            file_b: current.b.file,
+            variable_a: current.a.variable,
+            variable_b: current.b.variable,
+            extras: nextExtras,
+          });
+          rerender();
+        });
+      },
+    );
+
+    // 交叉谱：X 轴刻度只影响绘图，不必重新请求
+    const xScaleEl = document.getElementById("pairXScale");
+    if (xScaleEl) {
+      xScaleEl.addEventListener("change", () => {
+        state.pair = Object.assign({}, state.pair || state.pairDefaults(), {
+          xScale: xScaleEl.value,
+        });
+        if (hooks.rerenderAnalysis) hooks.rerenderAnalysis();
+      });
+    }
 
     const resetBtn = document.getElementById("pairResetBtn");
     if (resetBtn) {
       resetBtn.addEventListener("click", () => {
         state.resetPair();
-        const panel = document.getElementById("pairParamPanel");
-        if (!panel) return;
-        panel.outerHTML = renderPairPanel(null, cfg);
-        bindPairPanel(cfg);
+        rerender();
       });
     }
 
     applyBtn.addEventListener("click", () => {
-      const fallbackFile = state.currentFileId || "";
-      const fileAEl = document.getElementById("pairFileA");
-      const fileBEl = document.getElementById("pairFileB");
-      const fileA = (fileAEl && fileAEl.value) || fallbackFile;
-      const fileB = (fileBEl && fileBEl.value) || fileA;
-      const a = document.getElementById("pairVarA");
-      const b = document.getElementById("pairVarB");
-      const va = a ? a.value : "";
-      const vb = b ? b.value : "";
-      if (!va || !vb) return toast("请选择两个变量", "warn");
-      if (fileA === fileB && va === vb) {
+      const current = readGroups();
+      const { a, b } = current;
+      if (!a.variable || !b.variable) return toast("请选择两个变量", "warn");
+      if (a.file === b.file && a.variable === b.variable) {
         return toast("请选择两个不同的变量或数据文件", "warn");
       }
-      state.pair = {
-        file_a: fileA,
-        file_b: fileB,
-        variable_a: va,
-        variable_b: vb,
-      };
+      const keys = [a.file + "\u0000" + a.variable, b.file + "\u0000" + b.variable];
+      const keptExtras = [];
+      for (let i = 0; i < current.extras.length; i += 1) {
+        const extra = current.extras[i];
+        if (!extra.variable) continue;
+        const key = extra.file + "\u0000" + extra.variable;
+        if (keys.indexOf(key) >= 0) {
+          return toast("请选择不同的变量或数据文件进行分析", "warn");
+        }
+        keys.push(key);
+        keptExtras.push({ file: extra.file, variable: extra.variable });
+      }
+      state.pair = Object.assign({}, state.pair || state.pairDefaults(), {
+        file_a: a.file,
+        file_b: b.file,
+        variable_a: a.variable,
+        variable_b: b.variable,
+        extras: keptExtras,
+      });
+      if (cfg.crossOpts) {
+        state.pair.max_period = readNumber("pairMaxPeriod", null);
+        const scaleEl = document.getElementById("pairXScale");
+        if (scaleEl) state.pair.xScale = scaleEl.value;
+      }
       if (rerun) rerun();
     });
   }
 
   /** 交叉谱 / 相关性的面板（与对比面板同构，仅重算回调不同）。 */
   function renderVariablePanel(data, opts) {
-    return renderPairPanel(data, Object.assign({ rerun: "analysis" }, opts || {}));
+    const cfg = Object.assign({ rerun: "analysis" }, opts || {});
+    // 交叉谱多给「最大周期」「X 轴刻度」两个参数
+    if (cfg.crossOpts === undefined) {
+      cfg.crossOpts = cfg.title === "交叉谱分析";
+    }
+    return renderPairPanel(data, cfg);
   }
 
   function bindVariablePanel(opts) {
-    return bindPairPanel(Object.assign({ rerun: "analysis" }, opts || {}));
+    const cfg = Object.assign({ rerun: "analysis" }, opts || {});
+    if (cfg.crossOpts === undefined) {
+      cfg.crossOpts = cfg.title === "交叉谱分析";
+    }
+    return bindPairPanel(cfg);
   }
 
   function renderComparePanel(data) {
     return renderPairPanel(data, {
       title: "多序列对比",
-      badge: "两个数据 · 对比",
+      badge: "两个以上数据 · 对比",
       rerun: "compare",
+      multi: true,
     });
   }
 
   function bindComparePanel() {
-    return bindPairPanel({ title: "多序列对比", rerun: "compare" });
+    return bindPairPanel({
+      title: "多序列对比",
+      badge: "两个以上数据 · 对比",
+      rerun: "compare",
+      multi: true,
+    });
   }
 
 

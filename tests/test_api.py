@@ -1054,6 +1054,58 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(payload["source"]["file_a"], self.file_id)
         self.assertEqual(payload["source"]["align"]["n_b"], 180)
 
+    def test_cross_spectrum_max_period(self) -> None:
+        """max_period 把超过该周期的频段裁掉，只影响显示范围。"""
+        base = {"variable_a": "PR", "variable_b": "TEM", "lat": 35, "lon": 105}
+        full = self._post(f"/api/analysis/{self.file_id}/cross-spectrum", base)
+        clipped = self._post(
+            f"/api/analysis/{self.file_id}/cross-spectrum",
+            dict(base, max_period=12),
+        )
+        self.assertGreater(len(full["period"]), len(clipped["period"]))
+        self.assertLessEqual(max(clipped["period"]), 12.0)
+        self.assertEqual(len(clipped["period"]), len(clipped["coherence"]))
+        self.assertEqual(len(clipped["period"]), len(clipped["phase"]))
+
+    def test_compare_many_series_rejects_duplicate(self) -> None:
+        """同一个「数据 - 变量」组合重复出现时给出明确提示。"""
+        response = self.client.post(
+            f"/api/analysis/{self.file_id}/compare",
+            json={
+                "variable_a": "PR",
+                "variable_b": "TEM",
+                "lat": 35,
+                "lon": 105,
+                "extras": [{"variable": "TEM"}],
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("不同的变量或数据文件", response.json()["detail"])
+
+    def test_compare_many_series(self) -> None:
+        """多序列对比：extras 里追加的组合各成一条序列，可指向别的文件。"""
+        other = self._upload_shifted_copy()
+        payload = self._post(
+            f"/api/analysis/{self.file_id}/compare",
+            {
+                "variable_a": "PR",
+                "variable_b": "TEM",
+                "lat": 35,
+                "lon": 105,
+                "extras": [
+                    {"file": other, "variable": "TEM"},
+                    {"file": other, "variable": "PR"},
+                ],
+            },
+        )
+        self.assertEqual(len(payload["labels"]), 4)
+        self.assertEqual(len(payload["matrix"]), 4)
+        self.assertEqual(payload["source"]["count"], 4)
+        self.assertEqual(len(payload["series_meta"]), 4)
+        self.assertEqual(len(payload["source"]["series"]), 4)
+        self.assertEqual(payload["source"]["series"][2]["file"], other)
+        self.assertEqual(payload["source"]["series"][3]["variable"], "PR")
+
     def test_compare_across_files(self) -> None:
         other = self._upload_shifted_copy()
         payload = self._post(

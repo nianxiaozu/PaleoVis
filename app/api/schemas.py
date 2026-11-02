@@ -193,16 +193,26 @@ class CrossRequest(BaseModel):
     detrend: Literal["none", "linear", "mean"] = "linear"
 
 
+class SeriesRef(BaseModel):
+    """多序列对比里的一个「数据文件 + 变量」组合。"""
+
+    file: str | None = Field(default=None, description="数据文件 id；留空沿用数据 A 的文件")
+    variable: str | None = Field(default=None, description="变量名；留空取该文件第一个变量")
+
+
 class CrossFileRequest(BaseModel):
     """跨文件（或同文件）两个「数据 - 变量」的分析请求。
 
     file_a / file_b 缺省时由路径参数或当前文件兜底；两者相同即退回
     「同一文件内两个变量」的分析。两个文件的时间轴由后端取交集后对齐，
     只对重叠时段做计算。
+
+    `extras` 只用于多序列对比：在 A、B 之外追加的第 3 个及以后的组合。
     """
 
     file_a: str | None = None
     file_b: str | None = None
+    extras: list[SeriesRef] = Field(default_factory=list, description="多序列对比的附加序列")
     variable_a: str | None = None
     variable_b: str | None = None
     area_method: Literal["mean", "sum", "std"] = "mean"
@@ -219,6 +229,9 @@ class CrossFileRequest(BaseModel):
     method: Literal["pearson", "spearman", "kendall"] = "pearson"
     max_lag: int = Field(default=20, ge=0, le=200)
     normalize: bool = True
+    max_period: float | None = Field(
+        default=None, gt=0, description="交叉谱显示的最长周期；留空取全部频段"
+    )
 
 
 class CorrelationRequest(BaseModel):

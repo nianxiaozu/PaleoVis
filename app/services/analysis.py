@@ -444,7 +444,6 @@ def period_analysis(
     values: Sequence[float],
     *,
     dt: float = 1.0,
-    detrend: str = "linear",
     max_period: float | None = None,
     confidence: float = 0.95,
     max_lag: int | None = None,
@@ -456,13 +455,12 @@ def period_analysis(
       * 自相关用 Bartlett 标准误给出逐滞后的置信带；
       * 最大熵谱用同一条红噪声谱乘卡方分位数得到阈值。
     """
-    arr = _prepare(values)
-    n = arr.size
-    series = _detrend(arr, detrend)
+    series = _prepare(values)
+    n = series.size
     level = float(np.clip(confidence, 0.5, 0.999))
     z = _confidence_z(level)
     # 与功率谱 / REDFIT 同口径的 AR(1) 系数
-    rho = _ar1_rho(arr)
+    rho = _ar1_rho(series)
     fnyq = 0.5 / dt
 
     # ---- 自相关及其红噪声置信带 ----
@@ -508,7 +506,6 @@ def period_analysis(
         "type": "period",
         "n": int(n),
         "dt": float(dt),
-        "detrend": detrend,
         "acf": {
             "lag": [jsonable(v) for v in (np.arange(acf.size) * dt).tolist()],
             "value": [jsonable(v) for v in acf.tolist()],
@@ -793,8 +790,13 @@ def cross_spectrum(
     *,
     dt: float = 1.0,
     max_periods: int = 200,
+    max_period: float | None = None,
 ) -> dict[str, Any]:
-    """相干谱与相位谱。"""
+    """相干谱与相位谱。
+
+    max_periods 是抽取后保留的最大频点数（控制响应体积）；
+    max_period 是最长周期阈值，超过它的频段会被裁掉（只影响显示范围）。
+    """
     a = _prepare(values_a)
     b = _prepare(values_b)
     n = min(a.size, b.size)
@@ -818,6 +820,12 @@ def cross_spectrum(
     coherence = np.abs(pxy) ** 2 / np.maximum(pxx * pyy, 1e-18)
     phase = np.degrees(np.angle(pxy))
     coh_phase = np.cos(np.angle(pxy))
+
+    if max_period:
+        keep = (1.0 / freqs) <= float(max_period)
+        if np.count_nonzero(keep) >= 3:
+            freqs, coherence, phase, coh_phase = (
+                freqs[keep], coherence[keep], phase[keep], coh_phase[keep])
 
     if freqs.size > max_periods:
         step = int(math.ceil(freqs.size / max_periods))

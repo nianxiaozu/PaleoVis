@@ -104,6 +104,113 @@ def _apply_spec(values, spec, dt: float) -> tuple[np.ndarray, dict]:
     }
 
 
+def _series_refs(request: CrossFileRequest, path_file_id: str) -> list[tuple[str, str | None]]:
+    """把请求里的 A / B / extras 展开成有序的「文件 id, 变量名」列表。"""
+    file_a = request.file_a or path_file_id
+    file_b = request.file_b or file_a
+    refs: list[tuple[str, str | None]] = [
+        (file_a, request.variable_a),
+        (file_b, request.variable_b),
+    ]
+    for extra in request.extras or []:
+        refs.append((extra.file or file_a, extra.variable))
+    return refs
+
+
+def _aligned_many(
+    request: CrossFileRequest,
+    path_file_id: str,
+    http_request: Request | None,
+    *,
+    min_overlap: int = 4,
+) -> dict:
+    """取 N 个「数据 - 变量」的序列，按时间轴交集对齐后再做预处理。
+
+    file_a 缺省用路径上的 file_id；file_b 缺省与 file_a 相同（即同一文件内
+    两个变量，行为与旧端点一致）；extras 是多序列对比追加的第 3 个及以后的
+    组合。start/end 只作用于第一个组合，之后与其余序列取时间交集，因此无论
+    各序列范围如何，最终都只对公共时段做计算。
+    """
+    refs = _series_refs(request, path_file_id)
+    time_range = (
+        (request.start, request.end)
+        if request.start is not None and request.end is not None
+        else None
+    )
+
+    opened: dict[str, NCDataset] = {}
+    try:
+        series: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for index, (file_id, variable) in enumerate(refs):
+            dataset = opened.get(file_id)
+            if dataset is None:
+                dataset = dataset_from_id(file_id, http_request)
+                opened[file_id] = dataset
+            if not dataset.data_vars:
+                raise AnalysisError("所选数据文件中没有可分析的变量")
+            name = variable or dataset.data_vars[0]
+            if name not in dataset.data_vars:
+                raise AnalysisError(f"文件 {getattr(dataset, 'name', file_id)} 中不存在变量 {name}")
+            key = (file_id, name)
+            if key in seen:
+                raise AnalysisError("请选择不同的变量或数据文件进行分析")
+            seen.add(key)
+            payload = _raw_series(dataset, request, name, time_range if index == 0 else None)
+            series.append(
+                {
+                    "file": file_id,
+                    "name": getattr(dataset, "name", file_id),
+                    "variable": name,
+                    "payload": payload,
+                    "times": time_align.numeric_times(dataset, payload),
+                }
+            )
+
+        aligned = time_align.align_many([item["times"] for item in series])
+        overlap = int(aligned["common"].size)
+        if overlap < min_overlap:
+            sizes = [int(item["times"].size) for item in series]
+            raise AnalysisError(
+                "所选数据的时间范围没有足够的重叠时段"
+                f"（各序列时次依次为 {' / '.join(str(s) for s in sizes)}，"
+                f"公共时次仅 {overlap} 个，至少需要 {min_overlap} 个）"
+            )
+
+        dt = float(request.dt) if request.dt else time_align.step_dt(aligned["common"])
+        for item, mapping in zip(series, aligned["mappings"]):
+            raw = np.asarray(item["payload"]["values"], dtype="float64")[mapping]
+            values, pre = _apply_spec(raw, request.preprocess, dt)
+            item["raw"] = raw
+            item["values"] = values
+            item["preprocess"] = pre
+
+        first = series[0]
+        labels = first["payload"].get("time") or []
+        time_labels = (
+            [labels[int(i)] for i in aligned["mappings"][0]]
+            if labels
+            else [str(i) for i in range(overlap)]
+        )
+        return {
+            "series": series,
+            "dt": dt,
+            "time": time_labels,
+            "align": {
+                "n_a": int(series[0]["times"].size),
+                "n_b": int(series[1]["times"].size),
+                "overlap": overlap,
+                "tolerance": float(aligned["tolerance"]),
+                "start": time_labels[0] if time_labels else "",
+                "end": time_labels[-1] if time_labels else "",
+                "sizes": [int(item["times"].size) for item in series],
+            },
+        }
+    finally:
+        for dataset in opened.values():
+            dataset.close()
+
+
 def _aligned_pair(
     request: CrossFileRequest,
     path_file_id: str,
@@ -111,102 +218,36 @@ def _aligned_pair(
     *,
     min_overlap: int = 4,
 ) -> dict:
-    """取两个「数据 - 变量」的序列，按时间轴交集对齐后再做预处理。
-
-    file_a 缺省用路径上的 file_id；file_b 缺省与 file_a 相同（即同一文件内
-    两个变量，行为与旧端点一致）。start/end 只作用于数据 A，之后与数据 B
-    取时间交集，因此无论两侧范围如何，最终都只对公共时段做计算。
-    """
-    file_a = request.file_a or path_file_id
-    file_b = request.file_b or file_a
-
-    time_range = (
-        (request.start, request.end)
-        if request.start is not None and request.end is not None
-        else None
+    """两个「数据 - 变量」的对齐结果（`_aligned_many` 的前两项）。"""
+    many = _aligned_many(
+        request, path_file_id, http_request, min_overlap=min_overlap
     )
-
-    ds_a = dataset_from_id(file_a, http_request)
-    ds_b = ds_a
-    try:
-        if file_b != file_a:
-            ds_b = dataset_from_id(file_b, http_request)
-
-        vars_a = ds_a.data_vars
-        vars_b = ds_b.data_vars
-        if not vars_a or not vars_b:
-            raise AnalysisError("所选数据文件中没有可分析的变量")
-
-        a_name = request.variable_a or vars_a[0]
-        b_name = request.variable_b or vars_b[0]
-        if file_a == file_b and a_name == b_name:
-            raise AnalysisError("请选择两个不同的变量或数据文件进行分析")
-
-        a = _raw_series(ds_a, request, a_name, time_range)
-        b = _raw_series(ds_b, request, b_name, None)
-
-        times_a = time_align.numeric_times(ds_a, a)
-        times_b = time_align.numeric_times(ds_b, b)
-        aligned = time_align.align_two(times_a, times_b)
-        overlap = int(aligned["overlap"])
-        if overlap < min_overlap:
-            raise AnalysisError(
-                "两个数据的时间范围没有足够的重叠时段"
-                f"（数据 A 共 {aligned['n_a']} 个时次，数据 B 共 {aligned['n_b']} 个时次，"
-                f"公共时次仅 {overlap} 个，至少需要 {min_overlap} 个）"
-            )
-
-        idx_a = aligned["index_a"]
-        idx_b = aligned["index_b"]
-        raw_a = np.asarray(a["values"], dtype="float64")[idx_a]
-        raw_b = np.asarray(b["values"], dtype="float64")[idx_b]
-
-        dt = float(request.dt) if request.dt else time_align.step_dt(aligned["common"])
-        values_a, pre_a = _apply_spec(raw_a, request.preprocess, dt)
-        values_b, pre_b = _apply_spec(raw_b, request.preprocess, dt)
-
-        labels_a = a.get("time") or []
-        labels_b = b.get("time") or []
-        time_labels = [labels_a[int(i)] for i in idx_a] if labels_a else [str(i) for i in range(overlap)]
-        time_labels_b = [labels_b[int(i)] for i in idx_b] if labels_b else list(time_labels)
-
-        return {
-            "file_a": file_a,
-            "file_b": file_b,
-            "name_a": getattr(ds_a, "name", file_a),
-            "name_b": getattr(ds_b, "name", file_b),
-            "variable_a": a_name,
-            "variable_b": b_name,
-            "units_a": a.get("units", ""),
-            "units_b": b.get("units", ""),
-            "mode_a": a.get("mode"),
-            "mode_b": b.get("mode"),
-            "area_method_a": a.get("area_method"),
-            "area_method_b": b.get("area_method"),
-            "area_method_label_a": a.get("area_method_label"),
-            "area_method_label_b": b.get("area_method_label"),
-            "values_a": values_a,
-            "values_b": values_b,
-            "raw_values_a": raw_a,
-            "raw_values_b": raw_b,
-            "preprocess_a": pre_a,
-            "preprocess_b": pre_b,
-            "dt": dt,
-            "time": time_labels,
-            "time_b": time_labels_b,
-            "align": {
-                "n_a": int(aligned["n_a"]),
-                "n_b": int(aligned["n_b"]),
-                "overlap": overlap,
-                "tolerance": float(aligned["tolerance"]),
-                "start": time_labels[0] if time_labels else "",
-                "end": time_labels[-1] if time_labels else "",
-            },
-        }
-    finally:
-        if ds_b is not ds_a:
-            ds_b.close()
-        ds_a.close()
+    a, b = many["series"][0], many["series"][1]
+    return {
+        "file_a": a["file"],
+        "file_b": b["file"],
+        "name_a": a["name"],
+        "name_b": b["name"],
+        "variable_a": a["variable"],
+        "variable_b": b["variable"],
+        "units_a": a["payload"].get("units", ""),
+        "units_b": b["payload"].get("units", ""),
+        "mode_a": a["payload"].get("mode"),
+        "mode_b": b["payload"].get("mode"),
+        "area_method_a": a["payload"].get("area_method"),
+        "area_method_b": b["payload"].get("area_method"),
+        "area_method_label_a": a["payload"].get("area_method_label"),
+        "area_method_label_b": b["payload"].get("area_method_label"),
+        "values_a": a["values"],
+        "values_b": b["values"],
+        "raw_values_a": a["raw"],
+        "raw_values_b": b["raw"],
+        "preprocess_a": a["preprocess"],
+        "preprocess_b": b["preprocess"],
+        "dt": many["dt"],
+        "time": many["time"],
+        "align": many["align"],
+    }
 
 
 @router.post("/{file_id}/power-spectrum", summary="功率谱分析")
@@ -275,7 +316,6 @@ def period(
     out = analysis.period_analysis(
         base["values"],
         dt=base["source"]["dt"],
-        detrend=request.detrend,
         max_period=request.max_period,
         confidence=request.confidence,
         max_lag=request.max_lag,
@@ -472,8 +512,59 @@ def series_export_endpoint(
     )
 
 
+def _series_labels(series: list[dict]) -> list[str]:
+    """给每条序列起一个可读标签；同名时用序号区分。"""
+    labels: list[str] = []
+    for item in series:
+        label = f"{item['variable']}（{item['name']}）"
+        if label in labels:
+            label = f"{item['variable']}（{item['name']}）· {len(labels) + 1}"
+        labels.append(label)
+    return labels
+
+
+def _many_source(many: dict, n: int, labels: list[str]) -> dict:
+    """把 N 条序列的对齐结果整理成前端使用的 source 元信息。"""
+    series = many["series"]
+    source = {
+        "file_a": series[0]["file"],
+        "file_b": series[1]["file"],
+        "file_name_a": series[0]["name"],
+        "file_name_b": series[1]["name"],
+        "variable_a": series[0]["variable"],
+        "variable_b": series[1]["variable"],
+        "units_a": series[0]["payload"].get("units", ""),
+        "units_b": series[1]["payload"].get("units", ""),
+        "mode_a": series[0]["payload"].get("mode"),
+        "mode_b": series[1]["payload"].get("mode"),
+        "area_method_label_a": series[0]["payload"].get("area_method_label"),
+        "area_method_label_b": series[1]["payload"].get("area_method_label"),
+        "preprocess_a": series[0]["preprocess"],
+        "preprocess_b": series[1]["preprocess"],
+        "dt": many["dt"],
+        "n": int(n),
+        "time": many["time"][:n],
+        "align": many["align"],
+        "count": len(series),
+        "series": [
+            {
+                "label": labels[index],
+                "file": item["file"],
+                "file_name": item["name"],
+                "variable": item["variable"],
+                "units": item["payload"].get("units", ""),
+                "mode": item["payload"].get("mode"),
+                "area_method_label": item["payload"].get("area_method_label"),
+                "preprocess": item["preprocess"],
+            }
+            for index, item in enumerate(series)
+        ],
+    }
+    return source
+
+
 def _pair_source(pair: dict, n: int) -> dict:
-    """把对齐结果整理成前端使用的 source 元信息。"""
+    """把两条序列的对齐结果整理成前端使用的 source 元信息。"""
     return {
         "file_a": pair["file_a"],
         "file_b": pair["file_b"],
@@ -504,7 +595,11 @@ def cross(
 ) -> dict:
     pair = _aligned_pair(request, file_id, http_request)
     out = analysis.cross_spectrum(
-        pair["values_a"], pair["values_b"], dt=pair["dt"])
+        pair["values_a"],
+        pair["values_b"],
+        dt=pair["dt"],
+        max_period=request.max_period,
+    )
     out["source"] = _pair_source(pair, out["n"])
     return out
 
@@ -547,21 +642,20 @@ def compare_in_file(
     request: CrossFileRequest,
     http_request: Request = None,
 ) -> dict:
-    """取两个「数据 - 变量」的序列，对齐时间轴后做标准化对比与相关矩阵。"""
-    pair = _aligned_pair(request, file_id, http_request)
-    label_a = f"{pair['variable_a']}（{pair['name_a']}）"
-    label_b = f"{pair['variable_b']}（{pair['name_b']}）"
-    if label_a == label_b:
-        label_a = f"{pair['variable_a']} · A"
-        label_b = f"{pair['variable_b']} · B"
-
-    out = analysis.compare_series(
-        {label_a: pair["values_a"], label_b: pair["values_b"]},
-        normalize=request.normalize,
-    )
-    out["source"] = _pair_source(pair, out["n"])
+    """取 N 个「数据 - 变量」的序列，对齐时间轴后做标准化对比与相关矩阵。"""
+    many = _aligned_many(request, file_id, http_request)
+    labels = _series_labels(many["series"])
+    mapping = {
+        labels[index]: item["values"]
+        for index, item in enumerate(many["series"])
+    }
+    out = analysis.compare_series(mapping, normalize=request.normalize)
+    out["source"] = _many_source(many, out["n"], labels)
     out["series_meta"] = {
-        label_a: {"units": pair["units_a"], "file": pair["name_a"]},
-        label_b: {"units": pair["units_b"], "file": pair["name_b"]},
+        labels[index]: {
+            "units": item["payload"].get("units", ""),
+            "file": item["name"],
+        }
+        for index, item in enumerate(many["series"])
     }
     return out

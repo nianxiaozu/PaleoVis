@@ -642,11 +642,7 @@
       } else if (ui.currentTab === "chart-view") {
         fetchSeries();
       } else {
-        const ids = ["specApplyBtn", "pdApplyBtn", "abApplyBtn",
-          "wvApplyBtn", "pairApplyBtn", "eemdApplyBtn"];
-        const btn = ids.map((id) => document.getElementById(id)).find(Boolean);
-        if (btn) btn.click();
-        else if (ui.currentTool && ANALYSIS_CONFIG[ui.currentTool]) {
+        if (ui.currentTool && ANALYSIS_CONFIG[ui.currentTool]) {
           runAnalysis(ui.currentTool);
         }
       }
@@ -1781,7 +1777,7 @@
     },
     "cross-spectrum": {
       title: "交叉谱分析",
-      run: (id, body) => api.crossSpectrum(id, Object.assign(body, state.pairBody())),
+      run: (id, body) => api.crossSpectrum(id, Object.assign(body, state.crossBody())),
     },
     eemd: {
       title: "经验模态分解",
@@ -1834,8 +1830,13 @@
         global.PaleoParamPanel.renderVariablePanel(state.analysis, {
           title: "交叉谱分析",
           badge: "两个数据 · 相位/相干",
+          crossOpts: true,
         }),
-      bind: () => global.PaleoParamPanel.bindVariablePanel({ title: "交叉谱分析" }),
+      bind: () =>
+        global.PaleoParamPanel.bindVariablePanel({
+          title: "交叉谱分析",
+          crossOpts: true,
+        }),
     },
     correlation: {
       title: "相关性分析",
@@ -1849,7 +1850,7 @@
     },
     compare: {
       title: "多序列对比",
-      hint: "选择两个「数据 + 变量」后点击「应用并计算」",
+      hint: "选择「数据 + 变量」组合，可点 ＋ 继续追加后点击「应用并计算」",
       render: () => global.PaleoParamPanel.renderComparePanel(state.analysis),
       bind: () => global.PaleoParamPanel.bindComparePanel(),
     },

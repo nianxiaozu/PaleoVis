@@ -1886,6 +1886,74 @@ body.dragging::after {
   text-overflow: ellipsis;
 }
 
+/* 多序列对比：追加 / 删除「数据 - 变量」盒子 */
+.pre-group .pre-remove {
+  margin-left: auto;
+  align-self: flex-start;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pre-group .pre-remove:hover {
+  border-color: #fca5a5;
+  color: #ef4444;
+  background: #fef2f2;
+}
+
+.pre-add-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* 「＋」贴在最后一个「数据 - 变量」盒子的右侧 */
+.pre-group .pre-add {
+  margin-left: 0.4rem;
+  align-self: flex-end;
+  padding: 0.34rem 0.55rem;
+}
+
+/* 没有「✕」时，「＋」自己把整行撑到右侧 */
+.pre-group .pre-add.pre-add-tail {
+  margin-left: auto;
+}
+
+.pre-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.42rem 0.9rem;
+  border: 1px dashed #c7d2fe;
+  border-radius: 8px;
+  background: #f5f7ff;
+  color: #4f5bd5;
+  font-size: 0.74rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pre-add:hover {
+  border-color: var(--primary);
+  background: #eef2ff;
+  color: var(--primary);
+}
+
+.pre-add-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
 /* 只有一个数据文件时，文件名用静态文本占位 */
 .pre-fixed {
   display: inline-block;
