@@ -510,9 +510,42 @@ body.dragging::after {
   border-color: #c7d2fe;
 }
 
+/* 当前正在查看的文件：左侧竖条，与勾选态区分 */
 .modal-file-item.active {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+/* 勾选态 */
+.modal-file-item.checked {
   background: #eef2ff;
   border-color: var(--primary);
+}
+
+.modal-file-item .fi-check {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 4px;
+  position: relative;
+  transition: all 0.15s;
+}
+
+.modal-file-item.checked .fi-check {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.modal-file-item.checked .fi-check::after {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .modal-file-item .fi-icon {
@@ -578,6 +611,15 @@ body.dragging::after {
 
 .modal-foot-info { font-size: 0.7rem; color: #94a3b8; }
 .modal-foot-actions { display: flex; gap: 0.5rem; }
+/* button中的文字不换行 */
+.modal-foot-actions > button {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: 0;
+  white-space: nowrap;
+  padding: 0.42rem 1rem;
+  font-size: 0.76rem;
+}
 
 .axis-intro {
   font-size: 0.76rem;
@@ -1301,6 +1343,11 @@ body.dragging::after {
   cursor: not-allowed;
 }
 
+/* 导出按钮只在「图表视图」「EEMD 分解视图」出现，其余视图隐藏 */
+.action-btn.hidden {
+  display: none !important;
+}
+
 .action-btn.danger:hover:not(:disabled) {
   color: var(--danger);
   border-color: #fecaca;
@@ -1638,6 +1685,9 @@ body.dragging::after {
   border-radius: 9px;
   box-shadow: var(--shadow-sm);
   overflow: hidden;
+  /* 面板是列向 flex 的子项，overflow:hidden 会把 min-height:auto 解析为 0，
+     导致面板被 .chart-view 压扁、参数行被裁掉，这里显式禁止收缩 */
+  flex-shrink: 0;
 }
 
 .preprocess-head {
@@ -1758,6 +1808,17 @@ body.dragging::after {
   margin-top: 0.15rem;
 }
 
+.pre-static {
+  padding: 0.35rem 0.5rem;
+  border: 1px dashed #e2e8f0;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  color: #64748b;
+  background: #f8fafc;
+  line-height: 1.4;
+  margin-bottom: 1.2rem;
+}
+
 .pre-actions {
   display: flex;
   align-items: center;
@@ -1790,10 +1851,75 @@ body.dragging::after {
   background: #f8fafc;
 }
 
+/* 分析参数面板：复用预处理面板样式，仅补充功率谱等面板的宽度与提示 */
+.pre-field.pre-wide {
+  min-width: 186px;
+}
+
+.pre-field.pre-narrow {
+  min-width: 96px;
+}
+
+.pre-field.pre-narrow input[type="number"] {
+  width: 88px;
+}
+
+
+/* 双变量面板：「数据 A / 数据 B」各成一组「文件 + 变量」 */
+.pre-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.7rem 1rem;
+  padding: 0.55rem 0.7rem 0.6rem;
+  border: 1px solid #e8ecf6;
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.pre-group .pre-field {
+  min-width: 160px;
+}
+
+.pre-group .pre-field select {
+  max-width: 210px;
+  text-overflow: ellipsis;
+}
+
+/* 只有一个数据文件时，文件名用静态文本占位 */
+.pre-fixed {
+  display: inline-block;
+  padding: 0.35rem 0;
+  font-size: 0.76rem;
+  color: #334155;
+  font-weight: 500;
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 区域处理方式标签 */
+.sel-method {
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(102, 126, 234, 0.12);
+  color: #5a6fd8;
+  font-size: 0.7rem;
+}
+
+.spectrum-panel .preprocess-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .chart-box {
   position: relative;
   width: 100%;
   height: 300px;
+  flex-shrink: 0;
   background: white;
   border: 1px solid #eef2f7;
   border-radius: 8px;
@@ -1874,6 +2000,7 @@ body.dragging::after {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .metric-chip {
@@ -1929,6 +2056,7 @@ body.dragging::after {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+  flex-shrink: 0;
 }
 
 .analysis-card-head {
@@ -1955,6 +2083,31 @@ body.dragging::after {
   font-size: 0.72rem;
   color: #94a3b8;
   line-height: 1.6;
+}
+
+/* 分析卡片头部的轻量操作按钮（如 EEMD 单个分量导出） */
+.eemd-export {
+  flex-shrink: 0;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #64748b;
+  border-radius: 6px;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.eemd-export:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: #eef2ff;
+}
+
+.eemd-export:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .analysis-card-body {

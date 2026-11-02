@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -28,6 +29,49 @@ from app.core.ncutils import (
 )
 
 
+#: HDF5 / netCDF4 的 C 库不是线程安全的：并发打开或关闭同一进程内的文件会让
+#: 整个进程直接崩溃（实测多线程下报 "NetCDF: Not a valid ID" 甚至 abort）。
+#: FastAPI 的同步端点跑在线程池里，因此这里用一把全局锁把 open/close 串行化，
+#: 数据读取本身（numpy 运算）仍可并行。
+_NETCDF_IO_LOCK = threading.Lock()
+
+#: 区域处理方式 -> 中文说明（同时用于返回体与 NetCDF 属性）
+AREA_METHOD_LABELS = {
+    "mean": "区域平均（纬度加权）",
+    "sum": "区域求和",
+    "std": "区域标准差",
+}
+
+
+def _reduce_spatial(
+    subset: xr.DataArray,
+    spatial_dims: Sequence[str],
+    method: str,
+    lat_name: str | None,
+) -> xr.DataArray:
+    """按区域处理方式把空间维压缩成一条序列。"""
+    if not spatial_dims:
+        return subset
+    if method == "sum":
+        return subset.sum(dim=list(spatial_dims), skipna=True)
+    if method == "std":
+        return subset.std(dim=list(spatial_dims), skipna=True)
+    # 纬度加权平均：权重为 cos(lat)，把南高纬的网格面积差考虑进来
+    if lat_name and lat_name in subset.dims and lat_name in subset.coords:
+        try:
+            weights = np.cos(np.deg2rad(subset[lat_name].astype("float64")))
+            weights = xr.DataArray(
+                np.abs(np.asarray(weights.values, dtype="float64")),
+                coords={lat_name: subset[lat_name]},
+                dims=(lat_name,),
+            )
+            if float(weights.sum()) > 0:
+                return subset.weighted(weights).mean(dim=list(spatial_dims), skipna=True)
+        except Exception:
+            pass
+    return subset.mean(dim=list(spatial_dims), skipna=True)
+
+
 class NCDataset:
     """一次请求内打开一个 NetCDF 文件，提供各类分析所需的取数方法。"""
 
@@ -43,11 +87,13 @@ class NCDataset:
         self.file_id = file_id or self.path.stem
         self.name = name or self.path.name
         try:
-            self.ds = xr.open_dataset(self.path, decode_times=True)
+            with _NETCDF_IO_LOCK:
+                self.ds = xr.open_dataset(self.path, decode_times=True)
         except Exception:
             # 时间轴无法解码（缺少 cftime、非标准 calendar 等）时退回数值时间轴
             try:
-                self.ds = xr.open_dataset(self.path, decode_times=False)
+                with _NETCDF_IO_LOCK:
+                    self.ds = xr.open_dataset(self.path, decode_times=False)
             except Exception as exc:  # 损坏文件 / 不支持的格式
                 raise InvalidFileError(f"无法解析 NetCDF 文件：{exc}") from exc
 
@@ -57,7 +103,8 @@ class NCDataset:
     # ------------------------------------------------------------------ 基础
     def close(self) -> None:
         try:
-            self.ds.close()
+            with _NETCDF_IO_LOCK:
+                self.ds.close()
         except Exception:
             pass
 
@@ -217,6 +264,8 @@ class NCDataset:
         lat_range: tuple[float, float] | None = None,
         lon_range: tuple[float, float] | None = None,
         level_index: int | None = None,
+        lat_point: float | None = None,
+        lon_point: float | None = None,
     ) -> xr.DataArray:
         indexers: dict[str, Any] = {}
         dims = var.dims
@@ -225,11 +274,19 @@ class NCDataset:
             # time_range 为闭区间 [start, end]，isel 需要右端 +1
             indexers[self.time_name] = slice(time_range[0], time_range[1] + 1)
         if self.lat_name in dims and self.lat_values.size:
-            if lat_range is not None:
+            if lat_point is not None:
+                # 点位导出：取最近格点
+                indexers[self.lat_name] = int(nearest_index(self.lat_values, lat_point))
+            elif lat_range is not None:
                 i, j = self._coord_index_range(self.lat_values, lat_range[0], lat_range[1])
                 indexers[self.lat_name] = slice(i, j)
         if self.lon_name in dims and self.lon_values.size:
-            if lon_range is not None:
+            if lon_point is not None:
+                lon_used = float(lon_point)
+                if float(np.nanmax(self.lon_values)) > 180.0 and lon_used < 0:
+                    lon_used = float(lon_used % 360.0)
+                indexers[self.lon_name] = int(nearest_index(self.lon_values, lon_used))
+            elif lon_range is not None:
                 i, j = self._coord_index_range(
                     self.lon_values, lon_range[0], lon_range[1], is_lon=True
                 )
@@ -473,7 +530,19 @@ class NCDataset:
         *,
         time_range: tuple[int, int] | None = None,
         level_index: int | None = None,
+        area_method: str = "mean",
     ) -> dict[str, Any]:
+        """区域序列：对空间维做平均 / 求和 / 标准差。
+
+        area_method:
+          mean —— 纬度加权平均（权重 cos(lat)），面积代表性更好
+          sum  —— 区域内求和
+          std  —— 区域内标准差（空间离散度）
+        """
+        method = str(area_method or "mean").lower()
+        if method not in ("mean", "sum", "std"):
+            method = "mean"
+
         name = self.resolve_variable(variable)
         var = self.ds[name]
 
@@ -495,8 +564,10 @@ class NCDataset:
             "lat": _coord_extent(subset, self.lat_name),
             "lon": _coord_extent(subset, self.lon_name),
         }
-        mean = subset.mean(dim=[d for d in subset.dims if d != self.time_name], skipna=True)
-        values = np.asarray(mean.values, dtype="float64").ravel()
+        spatial_dims = [d for d in subset.dims if d != self.time_name]
+        values = np.asarray(
+            _reduce_spatial(subset, spatial_dims, method, self.lat_name), dtype="float64"
+        ).ravel()
         labels = self.time_labels
         if labels and time_range is not None:
             labels = labels[time_range[0] : time_range[1] + 1]
@@ -508,6 +579,8 @@ class NCDataset:
             "units": str(self.ds[name].attrs.get("units", "") or ""),
             "long_name": str(self.ds[name].attrs.get("long_name") or name),
             "mode": "area_mean",
+            "area_method": method,
+            "area_method_label": AREA_METHOD_LABELS[method],
             "extent": extent,
             "time": labels,
             "time_index": list(range(time_range[0], time_range[1] + 1)) if time_range else list(range(values.size)),
@@ -945,6 +1018,8 @@ class NCDataset:
         lat_range: tuple[float, float] | None = None,
         lon_range: tuple[float, float] | None = None,
         level_index: int | None = None,
+        lat_point: float | None = None,
+        lon_point: float | None = None,
     ) -> xr.Dataset:
         name = self.resolve_variable(variable)
         var = self._slice_var(
@@ -953,6 +1028,8 @@ class NCDataset:
             lat_range=lat_range,
             lon_range=lon_range,
             level_index=level_index,
+            lat_point=lat_point,
+            lon_point=lon_point,
         )
         subset = var.to_dataset(name=name)
         subset.attrs = dict(self.ds.attrs)
@@ -967,6 +1044,8 @@ class NCDataset:
         lat_range: tuple[float, float] | None = None,
         lon_range: tuple[float, float] | None = None,
         level_index: int | None = None,
+        lat_point: float | None = None,
+        lon_point: float | None = None,
     ) -> Path:
         subset = self.subset_dataset(
             variable,
@@ -974,16 +1053,122 @@ class NCDataset:
             lat_range=lat_range,
             lon_range=lon_range,
             level_index=level_index,
+            lat_point=lat_point,
+            lon_point=lon_point,
         )
         name = self.resolve_variable(variable)
-        key = _cache_key(self.file_id, "export", name, time_range, lat_range, lon_range, level_index)
+        key = _cache_key(
+            self.file_id,
+            "export",
+            name,
+            time_range,
+            lat_range,
+            lon_range,
+            level_index,
+            lat_point,
+            lon_point,
+        )
         out_path = settings.cache_dir / f"{key}.nc"
         settings.cache_dir.mkdir(parents=True, exist_ok=True)
-        subset.to_netcdf(out_path)
+        with _NETCDF_IO_LOCK:
+            _sanitize_for_write(subset).to_netcdf(out_path)
         return out_path
 
 
 # ---------------------------------------------------------------------- 工具函数
+#: 写文件时不希望被继承的编码字段：源文件里的 _FillValue / missing_value 常互相冲突，
+#: 直接 to_netcdf 会抛 "conflicting _FillValue and missing_value"。
+_UNSAFE_ENCODING_KEYS = (
+    "_FillValue",
+    "missing_value",
+    "chunksizes",
+    "preferred_chunks",
+    "contiguous",
+    "original_shape",
+    "source",
+    "zlib",
+    "complevel",
+    "shuffle",
+    "fletcher32",
+)
+
+
+def _sanitize_for_write(dataset: xr.Dataset) -> xr.Dataset:
+    """清掉会与 CF 编码冲突的变量编码，保证子集能顺利写出 NetCDF。"""
+    cleaned = dataset.copy()
+    for variable in cleaned.variables.values():
+        for key in _UNSAFE_ENCODING_KEYS:
+            variable.encoding.pop(key, None)
+    # 浮点变量统一用 NaN 作为缺测值（整数/时间轴不设），避免与 missing_value 冲突
+    for variable in cleaned.variables.values():
+        if np.issubdtype(variable.dtype, np.floating):
+            variable.encoding["_FillValue"] = np.nan
+    cleaned.attrs.pop("_NCProperties", None)
+    return cleaned
+
+
+def series_to_netcdf(
+    series: dict[str, Sequence[float]],
+    out_path: Path,
+    *,
+    time_labels: Sequence[str] | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> Path:
+    """把若干条等长序列写成一份 NetCDF（用于导出 EEMD 的 IMF 与残差）。"""
+    names = [name for name, values in series.items() if values is not None]
+    if not names:
+        raise AnalysisError("没有可导出的序列")
+    length = len(series[names[0]])
+    for name in names:
+        if len(series[name]) != length:
+            raise AnalysisError("导出序列长度不一致：" + name)
+
+    index = np.arange(length, dtype="int32")
+    data_vars = {}
+    coords: dict[str, Any] = {"time_index": ("time", index)}
+    if time_labels and len(time_labels) == length:
+        coords["time"] = ("time", [str(v) for v in time_labels])
+    for name in names:
+        data_vars[name] = ("time", np.asarray(series[name], dtype="float64"))
+
+    dataset = xr.Dataset(data_vars=data_vars, coords=coords)
+    dataset.attrs["title"] = "PaleoVis 序列导出"
+    if attrs:
+        for key, value in attrs.items():
+            if value is None:
+                continue
+            dataset.attrs[str(key)] = value
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with _NETCDF_IO_LOCK:
+        _sanitize_for_write(dataset).to_netcdf(out_path)
+    return out_path
+
+
+def series_to_csv(
+    series: dict[str, Sequence[float]],
+    *,
+    time_labels: Sequence[str] | None = None,
+) -> str:
+    """把若干条等长序列写成 CSV 文本（列：time_index, [time], 各序列名）。"""
+    names = [name for name, values in series.items() if values is not None]
+    if not names:
+        raise AnalysisError("没有可导出的序列")
+    length = len(series[names[0]])
+    has_time = bool(time_labels) and len(time_labels) == length
+    header = ["time_index"] + (["time"] if has_time else []) + names
+    lines = [",".join(header)]
+    for i in range(length):
+        row = [str(i)]
+        if has_time:
+            row.append(str(time_labels[i]))
+        for name in names:
+            value = series[name][i]
+            row.append("" if value is None else repr(float(value)))
+        lines.append(",".join(row))
+    return "\n".join(lines)
+
+
 def _coord_extent(subset: xr.DataArray, name: str | None) -> list[float] | None:
     """取子集在某坐标维度上的实际范围。"""
     if not name:

@@ -8,6 +8,7 @@
   const state = global.PaleoState;
   const C = global.PaleoChart;
   const T = global.PaleoTheme;
+  const P = global.PaleoParamPanel;
 
   const ui = {
     tabs: {},
@@ -18,6 +19,8 @@
     xrView: null,
     config: null,
     seriesCache: [],
+    /** 当前分析视图只显示了参数面板、还没真正计算过 */
+    panelPending: false,
   };
 
   // ------------------------------------------------------------- 启动
@@ -30,6 +33,19 @@
     bindDragDrop();
     bindModals();
     bindAnomalyBaseline();
+    P.init({
+      fetchSeries: (options) => fetchSeries(options),
+      toast: (message, type) => toast(message, type),
+      // 重算当前正在看的分析；没有当前分析时退回功率谱
+      rerunAnalysis: () => runAnalysis(ui.currentTool && ANALYSIS_CONFIG[ui.currentTool] ? ui.currentTool : "power-spectrum"),
+      rerunCompare: () => runCompare(),
+      rerenderAnalysis: () => {
+        const container = ui.containers.analysisContainer;
+        if (state.analysis && global.PaleoAnalysis.has(ui.currentTool)) {
+          global.PaleoAnalysis.render(ui.currentTool, container, state.analysis);
+        }
+      },
+    });
     initServer();
     updateSelectionSummary();
     // 启动时不加载任何数据，只拉取文件列表供弹窗展示
@@ -97,12 +113,15 @@
         }
 
         if (tool === "compare") {
+          // 先让用户勾选要对比的变量，点「应用并计算」后才取数
           switchTab("analysis-view");
-          runCompare();
+          showAnalysisPanel("compare");
           return;
         }
         switchTab("analysis-view");
-        runAnalysis(tool);
+        // 功率谱 / 小波 / 周期 / 突变：先只显示参数面板，点「应用并重算」才发请求
+        if (ANALYSIS_PANELS[tool]) showAnalysisPanel(tool);
+        else runAnalysis(tool);
       });
     });
 
@@ -168,6 +187,40 @@
     const modeBar = document.getElementById("mapModeBar");
     if (modeBar) modeBar.classList.toggle("show", name === "map-view");
     if (name === "map-view") ensureMap();
+    updateExportLabels();
+  }
+
+  /**
+   * 顶部两个导出按钮只在「图表视图」和「EEMD 分解视图」出现：
+   * 图表视图导出当前提取并预处理后的序列，EEMD 视图导出全部分量 + 残差。
+   * 两个视图里 NetCDF 按钮都是「写入数据文件」，CSV 按钮都是浏览器下载。
+   */
+  function updateExportLabels() {
+    const csvBtn = document.getElementById("exportBtn");
+    const ncBtn = document.getElementById("exportNetcdfBtn");
+    const eemd = eemdExportActive();
+    const visible = ui.currentTab === "chart-view" || eemd;
+
+    [csvBtn, ncBtn].forEach((btn) => {
+      if (!btn) return;
+      btn.classList.toggle("hidden", !visible);
+    });
+    if (!visible) return;
+
+    if (csvBtn) {
+      const span = csvBtn.querySelector("span");
+      if (span) span.textContent = eemd ? "导出全部分量 CSV" : "导出序列 CSV";
+      csvBtn.title = eemd
+        ? "把所有 IMF 与残差打包下载为 CSV"
+        : "把当前提取并预处理后的序列下载为 CSV";
+    }
+    if (ncBtn) {
+      const span = ncBtn.querySelector("span");
+      if (span) span.textContent = eemd ? "存入全部分量" : "存入数据文件";
+      ncBtn.title = eemd
+        ? "把所有 IMF 与残差写入一个新的 NetCDF 数据文件"
+        : "把当前提取并预处理后的序列写入一个新的 NetCDF 数据文件";
+    }
   }
 
   /** 地图视图：根据布局决定用交互地图还是 Hovmöller 热力图。 */
@@ -285,6 +338,13 @@
     return Math.round(Number(value) * 100) / 100;
   }
 
+  /** 区域处理方式的中文名，与后端 nc_processor.AREA_METHOD_LABELS 保持一致。 */
+  const AREA_METHOD_LABELS = {
+    mean: "区域平均（纬度加权）",
+    sum: "区域求和",
+    std: "区域标准差",
+  };
+
   function formatLatLon(lat, lon) {
     const latTag = lat >= 0 ? "°N" : "°S";
     const lonTag = lon >= 0 ? "°E" : "°W";
@@ -325,8 +385,13 @@
       if (wantLon) {
         parts.push(sel.lonMin.toFixed(1) + "° ~ " + sel.lonMax.toFixed(1) + "°E");
       }
+      const methodLabel = AREA_METHOD_LABELS[sel.areaMethod || "mean"] || "区域平均（纬度加权）";
       box.innerHTML =
-        '<span class="sel-tag">区域</span>' + T.esc(parts.join(", "));
+        '<span class="sel-tag">区域</span>' +
+        T.esc(parts.join(", ")) +
+        '<span class="sel-method">' +
+        T.esc(methodLabel) +
+        "</span>";
     }
   }
 
@@ -379,6 +444,17 @@
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", refreshMapField);
     });
+
+    // 区域处理方式：平均（纬度加权）/ 求和 / 标准差
+    const areaMethod = document.getElementById("areaMethod");
+    if (areaMethod) {
+      areaMethod.value = state.selection.areaMethod || "mean";
+      areaMethod.addEventListener("change", (event) => {
+        state.selection.areaMethod = event.target.value || "mean";
+        updateSelectionSummary();
+        if (state.series && state.selection.mode === "area") fetchSeries();
+      });
+    }
 
     bindTimeRange();
   }
@@ -556,9 +632,23 @@
 
     document.getElementById("refreshBtn").addEventListener("click", () => {
       loadFiles();
-      if (state.currentFileId) {
-        fetchSeries();
+      if (!state.currentFileId) return;
+
+      if (ui.currentTab === "data-view") {
+        const item = document.querySelector("#fileList .file-item.active");
+        if (item) item.click();
+      } else if (ui.currentTab === "map-view") {
         refreshMapField(true);
+      } else if (ui.currentTab === "chart-view") {
+        fetchSeries();
+      } else {
+        const ids = ["specApplyBtn", "pdApplyBtn", "abApplyBtn",
+          "wvApplyBtn", "pairApplyBtn", "eemdApplyBtn"];
+        const btn = ids.map((id) => document.getElementById(id)).find(Boolean);
+        if (btn) btn.click();
+        else if (ui.currentTool && ANALYSIS_CONFIG[ui.currentTool]) {
+          runAnalysis(ui.currentTool);
+        }
       }
     });
 
@@ -624,6 +714,10 @@
       const el = document.getElementById(id);
       if (el) el.addEventListener("click", closeFile);
     });
+    // 点击modal确定按钮，文件列表加入选择的文件
+    const confirmBtn = document.getElementById("modalConfirmBtn");
+    if (confirmBtn) confirmBtn.addEventListener("click", confirmFileSelection);
+
     const uploadBtn = document.getElementById("modalUploadBtn");
     if (uploadBtn) {
       uploadBtn.addEventListener("click", () => document.getElementById("fileInput").click());
@@ -664,6 +758,7 @@
   }
 
   async function showFileModal() {
+    state.modalSelection = new Set(state.addedFileIds || []);
     openModal(document.getElementById("fileModal"));
     await loadFiles({ autoSelect: false });
   }
@@ -672,7 +767,6 @@
     closeModalEl(document.getElementById("fileModal"));
   }
 
-
   function renderModalFileList() {
     const list = document.getElementById("modalFileList");
     if (!list) return;
@@ -680,25 +774,28 @@
     if (!state.files.length) {
       list.innerHTML =
         '<div class="file-empty">还没有数据文件<br><span>点击上方「上传新文件」导入 .nc 数据</span></div>';
-      const info = document.getElementById("modalFootInfo");
-      if (info) info.textContent = "";
+      syncModalConfirm();
       return;
     }
 
-    // 弹窗内展示所有文件
     const visibleFiles = state.files;
     list.innerHTML = visibleFiles
       .map((file) => {
         const kind = state.fileLayouts && state.fileLayouts[file.id];
         const kindLabel = kindLabelOf(kind);
+        const checked = state.modalSelection.has(file.id);
         return (
           '<div class="modal-file-item' +
+          (checked ? " checked" : "") +
           (file.id === state.currentFileId ? " active" : "") +
           '" data-id="' +
           file.id +
-          '" role="button" tabindex="0">' +
+          '" role="checkbox" aria-checked="' +
+          (checked ? "true" : "false") +
+          '" tabindex="0">' +
+          '<span class="fi-check" aria-hidden="true"></span>' +
           '<span class="fi-icon">' +
-          (file.source === "sample" ? "◈" : "▤") +
+          (file.source === "sample" ? "◈" : file.source === "derived" ? "✧" : "▤") +
           "</span>" +
           '<span class="fi-main"><span class="fi-name" title="' +
           T.esc(file.name) +
@@ -706,7 +803,7 @@
           T.esc(file.name) +
           '</span><span class="fi-sub">' +
           T.FORMAT.bytes(file.size) +
-          (file.readonly ? " · 只读示例" : "") +
+          (file.readonly ? " · 只读示例" : file.source === "derived" ? " · 派生数据" : "") +
           "</span></span>" +
           (kindLabel ? '<span class="fi-kind ' + T.esc(kind) + '">' + T.esc(kindLabel) + "</span>" : "") +
           (file.readonly
@@ -717,15 +814,16 @@
       })
       .join("");
 
+    // 点击 = 切换勾选，不再立即加载数据
     list.querySelectorAll(".modal-file-item").forEach((item) => {
-      item.addEventListener("click", async (event) => {
+      item.addEventListener("click", (event) => {
         if (event.target.classList.contains("fi-del")) return;
-        await selectFile(item.dataset.id);
+        toggleModalSelection(item.dataset.id);
       });
       item.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          selectFile(item.dataset.id);
+          toggleModalSelection(item.dataset.id);
         }
       });
     });
@@ -737,16 +835,47 @@
       });
     });
 
-    const info = document.getElementById("modalFootInfo");
-    if (info) {
-      info.textContent = state.currentFileId
-        ? "当前文件"
-        : "共 " + state.files.length + " 个文件，请选择";
-    }
-
-    // 后台补全每个文件的布局标签
+    syncModalConfirm();
     loadFileLayouts();
   }
+
+  /** 切换单个文件的勾选状态（只改内存 + 重渲染，不发请求）。 */
+  function toggleModalSelection(fileId) {
+    if (state.modalSelection.has(fileId)) state.modalSelection.delete(fileId);
+    else state.modalSelection.add(fileId);
+    renderModalFileList();
+  }
+
+  /** 同步「确定」按钮可用性与底部提示文案。 */
+  function syncModalConfirm() {
+    const count = state.modalSelection.size;
+    const btn = document.getElementById("modalConfirmBtn");
+    if (btn) {
+      btn.disabled = count === 0;
+      btn.textContent = count ? "确定（" + count + "）" : "确定";
+    }
+    const info = document.getElementById("modalFootInfo");
+    if (info) {
+      info.textContent = count
+        ? "已选 " + count + " 个文件，点「确定」加入数据文件列表"
+        : "共 " + state.files.length + " 个文件，请勾选";
+    }
+  }
+
+  /** 点「确定」：把勾选结果落成侧边栏列表，并打开第一个。 */
+  async function confirmFileSelection() {
+    const ids = state.files.map((f) => f.id).filter((id) => state.modalSelection.has(id));
+    if (!ids.length) return;
+    state.addedFileIds = ids;
+    if (state.currentFileId && ids.includes(state.currentFileId)) {
+      // 当前文件仍在列表里，保留视图，只刷新列表
+      renderFileList();
+      closeFileModal();
+      return;
+    }
+    await selectFile(ids[0]);   // selectFile 内部会刷新列表并关闭弹窗
+  }
+
 
   function kindLabelOf(kind) {
     return (
@@ -818,6 +947,8 @@
         showEmptyAll();
       }
       delete state.fileLayouts[fileId];
+      state.modalSelection.delete(fileId);
+      state.addedFileIds = state.addedFileIds.filter((id) => id !== fileId);
       await loadFiles({ autoSelect: false });
       toast("已删除", "success");
     } catch (err) {
@@ -938,10 +1069,26 @@
     try {
       const data = await api.listFiles();
       state.files = data.files || [];
+
+      const validIds = new Set(state.files.map((f) => f.id));
+      state.addedFileIds = (state.addedFileIds || []).filter((id) => validIds.has(id));
+      state.modalSelection.forEach((id) => {
+        if (!validIds.has(id)) state.modalSelection.delete(id);
+      });
+      if (state.currentFileId && !validIds.has(state.currentFileId)) {
+        state.currentFileId = null;
+        state.overview = null;
+        state.series = null;
+        showEmptyAll();
+      }
+
       renderFileList();
       renderModalFileList();
-      if (options.autoSelect !== false && state.files.length && !state.currentFileId) {
-        await selectFile(state.files[0].id);
+
+      // 只在「已加入」的文件里挑回退项，不擅自把未确认的文件塞进列表
+      if (options.autoSelect !== false && !state.currentFileId) {
+        const fallback = state.addedFileIds[0];
+        if (fallback) await selectFile(fallback);
       }
     } catch (err) {
       const list = document.getElementById("fileList");
@@ -951,16 +1098,18 @@
 
   function renderFileList() {
     const list = document.getElementById("fileList");
-    if (!state.files.length) {
-      list.innerHTML = '<div class="file-empty">还没有数据文件<br><span>点击「上传」或拖拽 .nc 文件到窗口</span></div>';
+    if (!list) return;
+
+    const visibleFiles = (state.addedFileIds || [])
+      .map((id) => state.files.find((f) => f.id === id))
+      .filter(Boolean);
+
+    if (!visibleFiles.length) {
+      list.innerHTML =
+        '<div class="file-empty">还没有数据文件<br><span>点击「选择文件」勾选后点确定</span></div>';
       return;
     }
-    if (!state.currentFileId) {
-      // 选中的文件已被删除等情况，回退到全部文件
-      state.currentFileId = null;
-      return renderModalFileList();
-    }
-    const visibleFiles = state.files.filter((file) => file.id === state.currentFileId)
+
     list.innerHTML = visibleFiles
       .map(
         (file) =>
@@ -970,7 +1119,7 @@
           file.id +
           '">' +
           '<span class="file-icon">' +
-          (file.source === "sample" ? "◈" : "▤") +
+          (file.source === "sample" ? "◈" : file.source === "derived" ? "✧" : "▤") +
           "</span>" +
           '<span class="file-meta"><span class="file-name" title="' +
           T.esc(file.name) +
@@ -978,11 +1127,12 @@
           T.esc(file.name) +
           '</span><span class="file-sub">' +
           T.FORMAT.bytes(file.size) +
-          (file.readonly ? " · 只读示例" : "") +
+          (file.readonly ? " · 只读示例" : file.source === "derived" ? " · 派生数据" : "") +
           "</span></span>" +
           "</button>",
       )
       .join("");
+
     list.querySelectorAll(".file-item").forEach((item) => {
       item.addEventListener("click", () => selectFile(item.dataset.id));
     });
@@ -1032,6 +1182,11 @@
   async function selectFile(fileId, opts) {
     const options = opts || {};
     state.currentFileId = fileId;
+
+    // 保证被打开的文件一定在modal列表中
+    if (!state.addedFileIds.includes(fileId)) state.addedFileIds.push(fileId);
+    state.modalSelection.add(fileId);
+
     renderFileList();
     renderModalFileList();
     showLoadingAll();
@@ -1040,6 +1195,8 @@
       state.overview = overview;
       state.variables = Object.values(overview.variables || {});
       state.variable = state.variables.length ? state.variables[0].name : null;
+      // 换文件后变量集合变了，重置双变量分析的「数据 - 变量」选择
+      state.resetPair();
       state.axisOverrides = overview.axis_overrides || {};
 
       // 自动识别失败：弹出坐标轴指定窗口
@@ -1354,7 +1511,7 @@
         "该位置在当前时段内没有有效数据，请换一个经纬度或调整时间范围";
       container.innerHTML =
         '<div class="chart-view">' +
-        renderPreprocessPanel(pre) +
+        P.renderPreprocessPanel(pre) +
         '<div class="chart-empty">' +
         '<svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="#cbd5e1" stroke-width="1.5">' +
         '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>' +
@@ -1364,7 +1521,7 @@
         T.esc(reason) +
         "</span>" +
         "</div></div>";
-      bindPreprocessPanel();
+      P.bindPreprocessPanel();
       return;
     }
 
@@ -1388,7 +1545,7 @@
 
     container.innerHTML =
       '<div class="chart-view">' +
-      renderPreprocessPanel(pre) +
+      P.renderPreprocessPanel(pre) +
       '<div class="metric-row">' +
       metric("变量", data.variable + (data.units ? " (" + data.units + ")" : "")) +
       metric("样本数", values.length) +
@@ -1410,7 +1567,7 @@
     });
 
     drawHistogram(document.getElementById("seriesHist"), values, preApplied ? "" : data.units);
-    bindPreprocessPanel();
+    P.bindPreprocessPanel();
   }
 
   /** 序列标题：兼容只有单条空间轴（Hovmöller）的数据。 */
@@ -1432,79 +1589,6 @@
     return data.variable + " 区域平均序列";
   }
 
-
-  function bindPreprocessPanel() {
-    const detrendEl = document.getElementById("preDetrend");
-    const stdEl = document.getElementById("preStandardize");
-    const filterEl = document.getElementById("preFilter");
-    const applyBtn = document.getElementById("preApplyBtn");
-    const resetBtn = document.getElementById("preResetBtn");
-    if (!applyBtn) return;
-
-    // 切换滤波类型时动态显示需要的时段输入框
-    filterEl.addEventListener("change", () => {
-      state.preprocess.filter = filterEl.value;
-      // 重新渲染面板以显示对应的输入框
-      const panel = document.querySelector(".preprocess-panel");
-      if (panel) {
-        panel.outerHTML = renderPreprocessPanel(state.series && state.series.preprocess);
-        bindPreprocessPanel();
-      }
-    });
-
-    detrendEl.addEventListener("change", () => {
-      state.preprocess.detrend = detrendEl.value;
-    })
-    stdEl.addEventListener("click", () => {
-      state.preprocess.standardize = stdEl.checked;
-    })
-    applyBtn.addEventListener("click", async () => {
-      state.preprocess.detrend = detrendEl.value;
-      state.preprocess.standardize = stdEl.checked;
-      state.preprocess.filter = filterEl.value;
-      const minEl = document.getElementById("prePeriodMin");
-      const maxEl = document.getElementById("prePeriodMax");
-      const orderEl = document.getElementById("preOrder");
-      state.preprocess.filter_period_min = minEl && minEl.value ? Number(minEl.value) : null;
-      state.preprocess.filter_period_max = maxEl && maxEl.value ? Number(maxEl.value) : null;
-      state.preprocess.order = orderEl && orderEl.value ? Number(orderEl.value) : 4;
-
-      // 参数校验
-      const p = state.preprocess;
-      if (p.filter === "bandpass") {
-        if (!p.filter_period_min || !p.filter_period_max) {
-          toast("带通滤波需要同时填写最短与最长周期", "warn");
-          return;
-        }
-        if (p.filter_period_min >= p.filter_period_max) {
-          toast("最短周期必须小于最长周期", "warn");
-          return;
-        }
-      }
-      if (p.filter === "lowpass" && !p.filter_period_min) {
-        toast("低通滤波需要填写截止周期", "warn");
-        return;
-      }
-      if (p.filter === "highpass" && !p.filter_period_max) {
-        toast("高通滤波需要填写截止周期", "warn");
-        return;
-      }
-      await fetchSeries({ silent: true });
-    });
-
-    resetBtn.addEventListener("click", async () => {
-      state.preprocess = {
-        detrend: "none",
-        standardize: false,
-        filter: "none",
-        filter_period_min: null,
-        filter_period_max: null,
-        order: 4,
-      };
-      await fetchSeries({ silent: true });
-      toast("已重置预处理", "success");
-    });
-  }
 
   function drawHistogram(el, values, units) {
     const finite = values.filter((v) => v !== null && isFinite(v));
@@ -1656,7 +1740,6 @@
     };
 
     [startEl, endEl].forEach((el) => {
-      el.addEventListener("change", apply);
       el.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -1678,94 +1761,127 @@
     }
   }
 
-  //--------------------------------------------图表视图预处理面板
-  function renderPreprocessPanel(pre) {
-    const p = state.preprocess;
-    const applied = pre && pre.applied;
-    const steps = (pre && pre.steps) || [];
-    const filterOn = p.filter && p.filter !== "none";
-    const needMin = p.filter === "lowpass" || p.filter === "bandpass";
-    const needMax = p.filter === "highpass" || p.filter === "bandpass";
-    return (
-      '<section class="preprocess-panel">' +
-      '<header class="preprocess-head">' +
-      "<h3>序列预处理</h3>" +
-      (applied
-        ? '<span class="pre-badge on">已应用：' + T.esc(steps.join(" · ")) + "</span>"
-        : '<span class="pre-badge">未启用</span>') +
-      "</header>" +
-      '<div class="preprocess-body">' +
-      // 去趋势
-      '<div class="pre-field">' +
-      '<label for="preDetrend">去趋势</label>' +
-      '<select id="preDetrend">' +
-      '<option value="none"' + (p.detrend === "none" ? " selected" : "") + ">不处理</option>" +
-      '<option value="linear"' + (p.detrend === "linear" ? " selected" : "") + ">线性去趋势</option>" +
-      '<option value="mean"' + (p.detrend === "mean" ? " selected" : "") + ">去均值</option>" +
-      "</select>" +
-      "</div>" +
-      // 标准化
-      '<div class="pre-field">' +
-      '<label for="preStandardize">标准化</label>' +
-      '<label class="pre-switch">' +
-      '<input type="checkbox" id="preStandardize"' + (p.standardize ? " checked" : "") + " />" +
-      "<span>z-score（均值 0，标准差 1）</span>" +
-      "</label>" +
-      "</div>" +
-      // 滤波
-      '<div class="pre-field">' +
-      '<label for="preFilter">滤波</label>' +
-      '<select id="preFilter">' +
-      '<option value="none"' + (!filterOn ? " selected" : "") + ">不滤波</option>" +
-      '<option value="lowpass"' + (p.filter === "lowpass" ? " selected" : "") + ">低通（保留长周期）</option>" +
-      '<option value="highpass"' + (p.filter === "highpass" ? " selected" : "") + ">高通（保留短周期）</option>" +
-      '<option value="bandpass"' + (p.filter === "bandpass" ? " selected" : "") + ">带通（保留指定周期段）</option>" +
-      "</select>" +
-      "</div>" +
-      // 滤波时段
-      '<div class="pre-field pre-periods"' + (filterOn ? "" : ' style="display:none"') + ">" +
-      '<label>滤波时段（周期，与时间轴同单位）</label>' +
-      '<div class="pre-period-row">' +
-      (needMin
-        ? '<input type="number" id="prePeriodMin" min="0" step="0.5" placeholder="最短周期" value="' +
-        (p.filter_period_min || "") + '" />'
-        : "") +
-      (needMax
-        ? '<input type="number" id="prePeriodMax" min="0" step="0.5" placeholder="最长周期" value="' +
-        (p.filter_period_max || "") + '" />'
-        : "") +
-      '<label>阶数:</label>' +
-      '<input type="number" id="preOrder" min="1" max="8" step="1" title="Butterworth 阶数" value="' +
-      (p.order || 4) +
-      '" />' +
-      "</div>" +
-      "</div>" +
-      // 操作
-      '<div class="pre-actions">' +
-      '<button class="btn-primary pre-apply" id="preApplyBtn">应用预处理</button>' +
-      '<button class="pre-reset" id="preResetBtn">重置</button>' +
-      "</div>" +
-      "</div>" +
-      "</section>"
-    );
-  }
-
   // ------------------------------------------------------------- 分析
   const ANALYSIS_CONFIG = {
     "power-spectrum": {
       title: "功率谱分析",
-      run: (id, body) => api.powerSpectrum(id, Object.assign(body, { window: "hann" })),
+      run: (id, body) => api.powerSpectrum(id, Object.assign(body, state.spectrumBody())),
     },
-    wavelet: { title: "小波分析", run: (id, body) => api.wavelet(id, Object.assign(body, { max_scale: 64 })) },
-    period: { title: "周期分析", run: (id, body) => api.period(id, body) },
+    wavelet: {
+      title: "小波分析",
+      run: (id, body) => api.wavelet(id, Object.assign(body, state.waveletBody())),
+    },
+    period: {
+      title: "周期分析",
+      run: (id, body) => api.period(id, Object.assign(body, state.periodBody())),
+    },
     "abrupt-change": {
       title: "突变分析",
-      run: (id, body) => api.abrupt(id, Object.assign(body, { method: "all", window: 10 })),
+      run: (id, body) => api.abrupt(id, Object.assign(body, state.abruptBody())),
     },
-    "cross-spectrum": { title: "交叉谱分析", run: (id, body) => api.crossSpectrum(id, body) },
-    eemd: { title: "经验模态分解", run: (id, body) => api.eemd(id, Object.assign(body, { max_imfs: 5, trials: 40 })) },
-    correlation: { title: "相关性分析", run: (id, body) => api.correlationInFile(id, body) },
+    "cross-spectrum": {
+      title: "交叉谱分析",
+      run: (id, body) => api.crossSpectrum(id, Object.assign(body, state.pairBody())),
+    },
+    eemd: {
+      title: "经验模态分解",
+      run: (id, body) => api.eemd(id, Object.assign(body, state.eemdBody())),
+    },
+    correlation: {
+      title: "相关性分析",
+      run: (id, body) => api.correlationInFile(id, Object.assign(body, state.pairBody())),
+    },
+    compare: {
+      title: "多序列对比",
+      run: (id, body) => api.compareInFile(id, Object.assign(body, state.pairBody())),
+    },
   };
+
+  /**
+   * 只渲染参数面板、不发请求的分析入口。
+   * 用户先调参数、点「应用并重算」后才真正计算，避免每次点菜单都跑一遍重计算。
+   */
+  const ANALYSIS_PANELS = {
+    "power-spectrum": {
+      title: "功率谱分析",
+      render: () => global.PaleoParamPanel.renderSpectrumPanel(state.analysis),
+      bind: () => global.PaleoParamPanel.bindSpectrumPanel(),
+    },
+    wavelet: {
+      title: "小波分析",
+      render: () => global.PaleoParamPanel.renderWaveletPanel(state.analysis),
+      bind: () => global.PaleoParamPanel.bindWaveletPanel(),
+    },
+    period: {
+      title: "周期分析",
+      render: () => global.PaleoParamPanel.renderPeriodPanel(state.analysis),
+      bind: () => global.PaleoParamPanel.bindPeriodPanel(),
+    },
+    "abrupt-change": {
+      title: "突变分析",
+      render: () => global.PaleoParamPanel.renderAbruptPanel(state.analysis),
+      bind: () => global.PaleoParamPanel.bindAbruptPanel(),
+    },
+    eemd: {
+      title: "经验模态分解",
+      render: () => global.PaleoParamPanel.renderEemdPanel(state.analysis),
+      bind: () => global.PaleoParamPanel.bindEemdPanel(),
+    },
+    "cross-spectrum": {
+      title: "交叉谱分析",
+      hint: "选择两个「数据 + 变量」后点击「应用并计算」",
+      render: () =>
+        global.PaleoParamPanel.renderVariablePanel(state.analysis, {
+          title: "交叉谱分析",
+          badge: "两个数据 · 相位/相干",
+        }),
+      bind: () => global.PaleoParamPanel.bindVariablePanel({ title: "交叉谱分析" }),
+    },
+    correlation: {
+      title: "相关性分析",
+      hint: "选择两个「数据 + 变量」后点击「应用并计算」",
+      render: () =>
+        global.PaleoParamPanel.renderVariablePanel(state.analysis, {
+          title: "相关性分析",
+          badge: "两个数据 · 相关/滞后",
+        }),
+      bind: () => global.PaleoParamPanel.bindVariablePanel({ title: "相关性分析" }),
+    },
+    compare: {
+      title: "多序列对比",
+      hint: "选择两个「数据 + 变量」后点击「应用并计算」",
+      render: () => global.PaleoParamPanel.renderComparePanel(state.analysis),
+      bind: () => global.PaleoParamPanel.bindComparePanel(),
+    },
+  };
+
+  function showAnalysisPanel(tool) {
+    const config = ANALYSIS_PANELS[tool];
+    if (!config) return;
+    const container = ui.containers.analysisContainer;
+    if (!state.currentFileId) {
+      C.empty(container, "请先选择数据文件", "从左侧文件列表选择或上传 .nc 文件");
+      return;
+    }
+    ui.currentTool = tool;
+    // 面板态：还没真正算过，顶部导出按钮不应出现
+    ui.panelPending = true;
+    const hint = config.hint || "设置参数后点击「应用并重算」";
+    container.innerHTML =
+      '<section class="analysis-card">' +
+      '<header class="analysis-card-head"><h3>' +
+      T.esc(config.title) +
+      '</h3><span class="card-hint">' +
+      T.esc(hint) +
+      "</span></header>" +
+      '<div class="analysis-card-body">' +
+      config.render() +
+      '<p class="card-note">参数确认后才会发起计算请求。</p>' +
+      "</div></section>";
+    config.bind();
+    // 从 EEMD 视图切到「只有参数面板」的视图时，顶部导出按钮要恢复原语义
+    updateExportLabels();
+  }
 
   async function runAnalysis(tool) {
     const config = ANALYSIS_CONFIG[tool];
@@ -1777,65 +1893,80 @@
     }
     C.loading(container, "正在计算 " + config.title + "…");
     ui.currentTool = tool;
+    ui.panelPending = false;
     try {
       const body = state.body();
       const data = await config.run(state.currentFileId, body);
       state.analysis = data;
       global.PaleoAnalysis.render(tool, container, data);
+      updateExportLabels();
     } catch (err) {
       C.error(container, err.message);
     }
   }
 
-  async function runCompare() {
-    const container = ui.containers.analysisContainer;
-    if (!state.currentFileId) {
-      C.empty(container, "请先选择数据文件", "对比分析需要至少一条序列");
-      return;
-    }
-    C.loading(container, "正在准备对比数据…");
-    ui.currentTool = "compare";
-    try {
-      // 收集多个序列：当前变量在不同点位的序列
-      const sel = state.selection;
-      const points =
-        sel.mode === "point"
-          ? [
-            { lat: sel.lat, lon: sel.lon, label: "当前点位" },
-            { lat: sel.lat, lon: sel.lon - 30, label: "西侧 30°" },
-            { lat: sel.lat, lon: sel.lon + 30, label: "东侧 30°" },
-            { lat: Math.max(-85, sel.lat - 20), lon: sel.lon, label: "南侧 20°" },
-            { lat: Math.min(85, sel.lat + 20), lon: sel.lon, label: "北侧 20°" },
-          ]
-          : [
-            { lat: (sel.latMin + sel.latMax) / 2, lon: (sel.lonMin + sel.lonMax) / 2, label: "区域中心" },
-          ];
-
-      const seriesMap = {};
-      for (const point of points) {
-        const params = Object.assign({}, currentQuery(), { lat: point.lat, lon: point.lon });
-        delete params.lat_min;
-        delete params.lat_max;
-        delete params.lon_min;
-        delete params.lon_max;
-        try {
-          const data = await api.series(state.currentFileId, params);
-          seriesMap[point.label + " (" + point.lat.toFixed(0) + "," + point.lon.toFixed(0) + ")"] = data.values;
-        } catch (err) {
-          console.warn("跳过序列", point.label, err.message);
-        }
-      }
-      if (Object.keys(seriesMap).length < 1) throw new Error("没有取到可用于对比的序列");
-
-      const data = await api.compare({ series: seriesMap, normalize: true });
-      global.PaleoAnalysis.render("compare", container, data);
-    } catch (err) {
-      C.error(container, err.message);
-    }
+  /**
+   * 多序列对比：两个「数据 + 变量」组合交给后端对比，
+   * 后端会按时间轴交集对齐，只对公共时段计算。
+   */
+  function runCompare() {
+    return runAnalysis("compare");
   }
 
   // ------------------------------------------------------------- 导出
+  /** 当前分析是否为 EEMD：是则顶部导出按钮改为打包全部 IMF + 残差。 */
+  function eemdExportActive() {
+    return (
+      !ui.panelPending &&
+      ui.currentTool === "eemd" &&
+      state.analysis &&
+      state.analysis.type === "eemd" &&
+      !!state.currentFileId
+    );
+  }
+
+  /**
+   * EEMD 全部分量导出：
+   * - netcdf → 写入服务端数据文件（出现在左侧文件列表）
+   * - csv    → 打包下载到浏览器
+   */
+  async function downloadEemdAll(format) {
+    const count = (state.analysis.imfs || []).length;
+    try {
+      if (format === "netcdf") {
+        const body = state.body(state.eemdBody({ format: "netcdf", target: "library" }));
+        const result = await api.eemdExport(state.currentFileId, body);
+        const name = (result && result.file && result.file.name) || "数据文件";
+        toast("已写入数据文件：" + name + "（" + count + " 个 IMF + 残差）", "success");
+        if (global.PaleoApp && global.PaleoApp.reloadFiles) global.PaleoApp.reloadFiles();
+        return;
+      }
+      const body = state.body(state.eemdBody({ format: "csv" }));
+      const payload = await api.eemdExport(state.currentFileId, body);
+      const stem = (state.variable || "series") + "_eemd_all";
+      downloadBlob(new Blob(["\ufeff" + payload], { type: "text/csv;charset=utf-8" }), stem + ".csv");
+      toast("已导出全部 EEMD 分量 CSV（" + count + " 个 IMF + 残差）", "success");
+    } catch (err) {
+      toast("导出失败：" + err.message, "error");
+    }
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   async function exportData() {
+    if (eemdExportActive()) {
+      await downloadEemdAll("csv");
+      return;
+    }
     if (!state.series) {
       toast("请先获取数据序列", "warn");
       return;
@@ -1859,27 +1990,26 @@
     toast("已导出 CSV", "success");
   }
 
+  /**
+   * 图表视图：把当前「提取 + 预处理」后的序列写入一个新的 NetCDF 数据文件，
+   * 并在文件属性里带上来源、区域处理方式、预处理步骤等描述。
+   * EEMD 视图走 downloadEemdAll，把全部 IMF + 残差写成一个文件。
+   */
   async function exportNetcdf() {
     if (!state.currentFileId) return toast("请先选择数据文件", "warn");
+    if (eemdExportActive()) {
+      await downloadEemdAll("netcdf");
+      return;
+    }
+    if (!state.series) return toast("请先获取数据序列", "warn");
     try {
-      const body = state.body({ format: "netcdf" });
-      const response = await fetch("/api/files/" + state.currentFileId + "/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) throw new Error("导出失败 (" + response.status + ")");
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download =
-        (state.overview ? state.overview.file.name.replace(/\.[^.]+$/, "") : "subset") + "_subset.nc";
-      a.click();
-      URL.revokeObjectURL(url);
-      toast("已导出 NetCDF 子集", "success");
+      const body = state.body({ format: "netcdf", target: "library" });
+      const result = await api.seriesExport(state.currentFileId, body);
+      const name = (result && result.file && result.file.name) || "数据文件";
+      toast("已写入数据文件：" + name, "success");
+      if (global.PaleoApp && global.PaleoApp.reloadFiles) global.PaleoApp.reloadFiles();
     } catch (err) {
-      toast("导出失败：" + err.message, "error");
+      toast("写入失败：" + err.message, "error");
     }
   }
 
@@ -1921,5 +2051,11 @@
     }, 3200);
   }
 
-  global.PaleoApp = { toast, switchTab, state };
+  global.PaleoApp = {
+    toast,
+    switchTab,
+    state,
+    /** 派生文件写入数据目录后，刷新左侧文件列表（不自动切换当前文件）。 */
+    reloadFiles: () => loadFiles({ autoSelect: false }),
+  };
 })(window);

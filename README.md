@@ -26,22 +26,30 @@
 | --- | --- |
 | `GET /api/datasets/{id}/overview` | 维度、坐标、变量、属性、统计摘要 |
 | `GET /api/datasets/{id}/variables` | 变量列表与坐标轴识别结果 |
-| `GET /api/datasets/{id}/series` | 点位序列 / 区域平均序列 |
+| `GET /api/datasets/{id}/series` | 点位序列 / 区域序列（`area_method` = `mean` 纬度加权平均 / `sum` 求和 / `std` 标准差） |
 | `GET /api/datasets/{id}/field` | 时间平均空间场（前端热力图） |
 | `POST /api/datasets/{id}/selector-series` | 请求体形式的取数（便于脚本调用） |
 
 ### 时序分析
 | 接口 | 方法 |
 | --- | --- |
-| `POST /api/analysis/{id}/power-spectrum` | 功率谱（周期图 + AR(1) 红噪声 95% 阈值） |
-| `POST /api/analysis/{id}/wavelet` | Morlet 连续小波变换 + 全局小波谱 |
-| `POST /api/analysis/{id}/period` | 自相关 + Burg 最大熵谱周期识别 |
+| `POST /api/analysis/{id}/power-spectrum` | 功率谱（周期图 / REDFIT / MTM，AR(1) 红噪声或蒙特卡洛阈值） |
+| `POST /api/analysis/{id}/wavelet` | 连续小波变换（Morlet / Paul / DOG）+ 全局小波谱，显著性等值线与影响锥 |
+| `POST /api/analysis/{id}/period` | 自相关（AR(1) 红噪声置信带）+ Burg 最大熵谱周期识别，阈值可选 90/95/99% |
 | `POST /api/analysis/{id}/abrupt-change` | Mann-Kendall / 滑动 t / Pettitt 突变检测 |
-| `POST /api/analysis/{id}/cross-spectrum` | 相干谱 + 相位谱 |
-| `POST /api/analysis/{id}/eemd` | 集合经验模态分解（自实现，无 PyEMD 依赖） |
-| `POST /api/analysis/{id}/correlation` | 同文件内两变量相关 + 滞后相关 |
-| `POST /api/analysis/correlation` | 任意两条序列相关 |
-| `POST /api/analysis/compare` | 多序列标准化对比 + 相关矩阵 |
+| `POST /api/analysis/{id}/cross-spectrum` | 相干谱 + 相位谱（两个「数据文件 + 变量」，跨文件时按时间轴交集对齐） |
+| `POST /api/analysis/{id}/eemd` | 集合经验模态分解（easyclimate `filter_eemd`） |
+| `POST /api/analysis/{id}/eemd/export` | EEMD 分量导出（单个 IMF/残差，或全部打包为 CSV / NetCDF；`target=library` 时写入数据文件） |
+| `POST /api/analysis/{id}/series/export` | 把当前提取并预处理后的序列写入数据文件（NetCDF），或下载 CSV |
+| `POST /api/analysis/{id}/correlation` | 两个「数据文件 + 变量」相关 + 滞后相关 |
+| `POST /api/analysis/{id}/compare` | 两个「数据文件 + 变量」标准化对比 + 相关矩阵 |
+| `POST /api/analysis/correlation` | 任意两条序列相关（脚本调用） |
+| `POST /api/analysis/compare` | 任意多条序列对比（脚本调用） |
+
+跨文件分析用请求体的 `file_a` / `file_b` 指定两个数据文件（缺省为路径里的 `{id}` 与数据 A 自身），
+`variable_a` / `variable_b` 指定各自的变量；后端会用两条序列的时间坐标求交集，
+只对公共时次计算，响应里的 `source.align` 给出 `n_a` / `n_b` / `overlap` / `tolerance` 等信息。
+两个文件完全没有重叠时段时返回 422 并说明重叠不足。
 
 ### 序列预处理
 `GET /api/datasets/{id}/series` 支持 query 参数直接预处理，分析接口通过请求体的 `preprocess` 字段沿用同一配置：
@@ -53,6 +61,7 @@
 | `filter` | `none` / `lowpass` / `highpass` / `bandpass` | Butterworth 零相位滤波 |
 | `filter_period_min` / `filter_period_max` | 周期值 | 滤波时段 |
 | `filter_order` | 1~8 | 滤波器阶数（默认 4） |
+| `area_method` | `mean` / `sum` / `std` | 区域序列的空间聚合方式：纬度加权平均 / 区域求和 / 区域标准差 |
 
 处理顺序固定为 **去趋势 → 滤波 → 标准化**；返回体含 `raw_values` 与 `preprocess.steps` 便于核对。
 
@@ -68,6 +77,15 @@
 - **图表视图**：时序折线图（十字准线提示）+ 数值分布直方图，内置**序列预处理**面板
   （去趋势 / 标准化 / 低通·带通·高通滤波，可叠加，原始曲线与处理后曲线叠加对比）
 - **分析视图**：8 类分析的图表与指标卡渲染，自动沿用图表视图的预处理结果
+- **参数面板**：功率谱 / 小波 / 周期 / 突变 / EEMD 以及交叉谱、相关性、多序列对比
+  都先展示参数面板（噪声种子、集合次数等），点「应用并计算」才发起请求
+- **跨文件双变量分析**：交叉谱 / 相关性 / 多序列对比的面板里，每个「数据」是一组
+  「数据文件 + 变量」下拉；侧栏有两个以上文件时各选各的文件与变量，只有一个文件时
+  自动退化为同文件里的两个变量。两侧时间轴自动对齐，只对公共时段分析
+- **写入数据文件**：图表视图的「存入数据文件」把提取并预处理后的序列写成 NetCDF 并注册进文件列表；
+  EEMD 视图的「存入文件 / 存入全部分量」把单个分量或全部分量打包写入数据文件
+- **数据描述属性**：写入的 NetCDF 自动带来源、区域处理方式、预处理步骤、
+  EEMD 分量序号与解释方差等键值对属性（键为 ASCII，值为中文，可用 ncdump 直接查看）
 - 支持拖拽上传、变量切换、双滑块时间范围、层次选择、CSV / NetCDF 导出
 
 ---
@@ -82,6 +100,9 @@ pip install -r requirements.txt
 
 > 需要 Python 3.10+。`netCDF4` 用于读取 NetCDF4/HDF5 格式；
 > 若安装失败可改用 `pip install h5netcdf`，xarray 会自动选择可用后端。
+>
+> 功率谱（周期图 / REDFIT）、小波、EEMD、Mann-Kendall 检验由 **easyclimate** 提供；
+> 未安装时这些分析会返回「未安装 easyclimate」的提示，其余功能不受影响。
 
 ### 2.2 启动
 
@@ -140,6 +161,8 @@ paleoclimate_study/
 │   └── services/
 │       ├── storage.py          # 文件仓库（上传目录 / 示例目录）
 │       ├── nc_processor.py     # NCDataset：取数、统计、出图、导出
+│       ├── easyclimate_bridge.py # easyclimate 调用封装（谱/小波/EEMD/MK）
+│       ├── series_export.py    # 序列写入 NetCDF + 数据描述属性生成
 │       └── analysis.py         # 全部时序分析算法
 ├── static/
 │   ├── index.html
@@ -152,6 +175,7 @@ paleoclimate_study/
 │       ├── map.js              # 交互式地图
 │       ├── xarray_view.js      # xarray 风格视图
 │       ├── analysis_view.js    # 分析结果渲染
+│       ├── parameter_panel.js  # 各分析的参数面板（预处理/谱/小波/突变/EEMD/变量选择）
 │       └── app.js              # 主逻辑
 ├── data/
 │   ├── samples/                # 只读示例数据
@@ -174,7 +198,8 @@ paleoclimate_study/
    选中文件后自动跳到数据视图。
 2. **选择变量与时段**：左侧「数据选择」切换变量；时间范围用**单条双滑块**拖拽调节，
    也可直接在下方两个输入框里键入起止时次。
-3. **取数**：左侧「数据查询」选「点位」输入经纬度，或选「区域平均」输入范围，点击「获取数据」。
+3. **取数**：左侧「数据查询」选「点位」输入经纬度，或选「区域」输入范围并在
+   「区域处理」下拉里选择**区域平均（纬度加权）/ 区域求和 / 区域标准差**，点击「获取数据」。
 4. **看空间分布**：切到「地图视图」，滚轮缩放、拖拽平移。
    - **选点位**：侧边栏选「点位」，直接单击地图，经纬度自动回填；
    - **框选区域**：侧边栏选「区域平均」，在地图上按住拖出矩形，松手即自动填入南北/东西边界并生成区域平均（区域模式下按住 Shift 拖拽可平移）。
@@ -182,7 +207,12 @@ paleoclimate_study/
    滤波支持输入周期范围（低通填最短周期、高通填最长周期、带通填两者）。
    应用后分析视图会**自动沿用同一套预处理**，保证图表与计算结果一致。
 6. **做分析**：从顶部菜单选择分析方法，结果在「分析视图」中展示。
-7. **导出**：工具栏「导出 CSV」导出当前序列；「导出子集」导出所选范围的 NetCDF。
+7. **导出**：两个导出按钮只在「图表视图」和「EEMD 分解视图」出现。
+   - 图表视图：「下载 CSV」把当前曲线导出为 CSV；「存入数据文件」把**提取并预处理后的序列**写成 NetCDF 并出现在左侧文件列表；
+   - EEMD 视图：「导出全部分量 CSV」下载全部分量；「存入全部分量」把 IMF 与残差打包写入数据文件；
+     每个分量卡片右上角的「存入文件」把该分量单独写入数据文件。
+   写入的文件属性里记录了来源变量、区域处理方式与范围、预处理步骤，EEMD 分量还带
+   分量序号、解释方差、集合次数与噪声种子，方便溯源。
 
 > 坐标轴识别支持常见命名（lat/latitude/y、lon/longitude/x、time/date），
 > 0~360 经度会自动换算，非标准日历（noleap/360_day）依赖 `cftime` 解码。
@@ -214,6 +244,13 @@ paleoclimate_study/
 python -m pytest tests/ -q      # 若已安装 pytest
 python tests/test_api.py        # 也可直接运行（内置 unittest）
 ```
+
+当前共 **68 个用例**，覆盖文件操作、数据集读取、8 类分析（含功率谱三种方法与两种 REDFIT 检验、
+小波全参数、周期分析的阈值与置信水平、EEMD 分量导出）以及 CSV / NetCDF 导出。
+
+其中 5 个用例专门覆盖本轮新增能力：区域处理三种方式（`mean`/`sum`/`std`）、
+EEMD 噪声种子的透传与可复现性、EEMD 分量写入数据文件、序列写入数据文件、
+以及写入文件的 NetCDF 描述属性（区域处理方式、预处理步骤、分量解释方差）。
 
 ---
 

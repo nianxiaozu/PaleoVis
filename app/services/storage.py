@@ -25,7 +25,7 @@ class FileRecord:
     source: str = "upload"  # upload | sample
     suffix: str = ".nc"
     path: str = ""
-    readonly: bool = False
+    readonly: bool = False  # 数据是否为只读
 
     def public(self) -> dict:
         data = asdict(self)
@@ -75,7 +75,9 @@ class StorageService:
         return path
 
     # ------------------------------------------------------------------ 写入
-    def save_upload(self, filename: str, content: bytes) -> FileRecord:
+    def save_upload(
+        self, filename: str, content: bytes, *, source: str = "upload"
+    ) -> FileRecord:
         if not content:
             raise InvalidFileError("上传内容为空")
         if len(content) > settings.max_upload_bytes:
@@ -97,7 +99,7 @@ class StorageService:
             name=safe,
             size=len(content),
             uploaded_at=_now(),
-            source="upload",
+            source=source,
             suffix=suffix,
             path=str(stored),
         )
@@ -199,7 +201,7 @@ class StorageService:
                     size=stat.st_size,
                     uploaded_at=meta.get("uploaded_at")
                     or _dt.datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
-                    source="upload",
+                    source=meta.get("source") or "upload",
                     suffix=path.suffix.lower(),
                     path=str(path),
                 )
@@ -225,7 +227,7 @@ class StorageService:
                     source="sample",
                     suffix=path.suffix.lower(),
                     path=str(path),
-                    readonly=True,
+                    readonly=True,   # 示例文件只读
                 )
             )
         return records

@@ -150,6 +150,8 @@ def export_subset(file_id: str, request: ExportRequest) -> Response:
                 lat_range=request.lat_pair,
                 lon_range=request.lon_pair,
                 level_index=request.level_index,
+                lat_point=request.lat,
+                lon_point=request.lon,
             )
             stem = Path(record.name).stem
             return FileResponse(
@@ -164,6 +166,8 @@ def export_subset(file_id: str, request: ExportRequest) -> Response:
             lat_range=request.lat_pair,
             lon_range=request.lon_pair,
             level_index=request.level_index,
+            lat_point=request.lat,
+            lon_point=request.lon,
         )
         csv_text = subset.to_dataframe().reset_index().to_csv(index=False)
     finally:

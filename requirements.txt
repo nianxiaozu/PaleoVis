@@ -8,3 +8,4 @@ scipy>=1.10
 pandas>=2.0
 matplotlib>=3.7
 cftime>=1.6
+easyclimate>=2025.12

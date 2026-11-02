@@ -73,6 +73,9 @@ def series(
     start: int | None = Query(default=None, ge=0),
     end: int | None = Query(default=None, ge=0),
     level_index: int | None = Query(default=None, ge=0),
+    area_method: Literal["mean", "sum", "std"] = Query(
+        default="mean", description="区域处理方式：mean=纬度加权平均 / sum=求和 / std=标准差"
+    ),
     detrend: Literal["none", "linear", "mean"] = Query(default="none"),
     standardize: bool = Query(default=False),
     filter: Literal["none", "lowpass", "highpass", "bandpass"] = Query(
@@ -109,6 +112,7 @@ def series(
         start=start,
         end=end,
         level_index=level_index,
+        area_method=area_method,
         preprocess=PreprocessSpec(
             detrend=detrend,
             standardize=standardize,
@@ -181,4 +185,5 @@ def selector_series(
         request.lon_pair,
         time_range=time_range,
         level_index=request.level_index,
+        area_method=request.area_method,
     )

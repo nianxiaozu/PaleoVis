@@ -13,6 +13,33 @@ from app.services.preprocess import apply_preprocess
 from app.services.storage import storage
 
 
+def _axis_overrides(request: Request | None) -> dict[str, str]:
+    """从查询参数里取出手动指定的坐标轴（?axis_time=&axis_lat=&axis_lon=）。"""
+    overrides: dict[str, str] = {}
+    if request is None:
+        return overrides
+    params = request.query_params
+    for key, param in (("time", "axis_time"), ("lat", "axis_lat"), ("lon", "axis_lon")):
+        value = params.get(param)
+        if value:
+            overrides[key] = value
+    return overrides
+
+
+def dataset_from_id(file_id: str, request: Request | None = None) -> NCDataset:
+    """按 file_id 打开数据集（调用方负责 close）。
+
+    跨文件分析需要同时打开两个数据集，无法走 Depends，故单独提供本函数。
+    """
+    record = storage.get(file_id)
+    return NCDataset(
+        record.path,
+        file_id=record.id,
+        name=record.name,
+        axis_overrides=_axis_overrides(request) or None,
+    )
+
+
 def open_dataset(file_id: str, request: Request = None) -> Iterator[NCDataset]:
     """打开数据集。
 
@@ -20,21 +47,7 @@ def open_dataset(file_id: str, request: Request = None) -> Iterator[NCDataset]:
       ?axis_time=time&axis_lat=latitude&axis_lon=longitude
     用于自动识别失败的数据集（用户在前端手动指定）。
     """
-    record = storage.get(file_id)
-    overrides: dict[str, str | None] = {}
-    if request is not None:
-        params = request.query_params
-        for key, param in (("time", "axis_time"), ("lat", "axis_lat"), ("lon", "axis_lon")):
-            value = params.get(param)
-            if value:
-                overrides[key] = value
-
-    dataset = NCDataset(
-        record.path,
-        file_id=record.id,
-        name=record.name,
-        axis_overrides=overrides or None,
-    )
+    dataset = dataset_from_id(file_id, request)
     try:
         yield dataset
     finally:
@@ -89,6 +102,7 @@ def extract_series(dataset: NCDataset, request) -> dict:
         getattr(request, "lon_pair", None),
         time_range=t_range,
         level_index=request.level_index,
+        area_method=getattr(request, "area_method", "mean") or "mean",
     )
 
 

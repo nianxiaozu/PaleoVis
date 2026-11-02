@@ -42,6 +42,47 @@
     return ticks;
   }
 
+  /** 估算图例需要几行（与 drawLine 中的排版规则保持一致）。 */
+  function countLegendRows(series, plotW) {
+    let rows = 1;
+    let lx = 8;
+    series.forEach((s, si) => {
+      const label = s.name || "序列 " + (si + 1);
+      const w = label.length * 7 + 24;
+      if (lx + w > plotW && lx > 8) {
+        rows += 1;
+        lx = 8;
+      }
+      lx += w;
+    });
+    return rows;
+  }
+
+  /** 对数轴刻度：在 [min, max] 内取 1-2-5 序列，跨度大时退化为整十次幂。 */
+  function logTicks(min, max, limit) {
+    const cap = limit || 8;
+    if (!(min > 0) || !(max > min)) return [];
+    const lo = Math.floor(Math.log10(min));
+    const hi = Math.ceil(Math.log10(max));
+    let ticks = [];
+    for (let e = lo; e <= hi; e += 1) {
+      const base = Math.pow(10, e);
+      [1, 2, 5].forEach((m) => {
+        const v = m * base;
+        if (v >= min * 0.999 && v <= max * 1.001) ticks.push(v);
+      });
+    }
+    if (ticks.length > cap) {
+      ticks = [];
+      for (let e = lo; e <= hi; e += 1) {
+        const v = Math.pow(10, e);
+        if (v >= min * 0.999 && v <= max * 1.001) ticks.push(v);
+      }
+    }
+    if (!ticks.length) ticks = [min, max];
+    return ticks;
+  }
+
   function extent(values) {
     let min = Infinity;
     let max = -Infinity;
@@ -116,16 +157,49 @@
       return;
     }
     const { width, height } = T.measure(el);
+    const hasTitle = Boolean(cfg.title);
+    const hasLegend = series.length > 1;
     const margin = Object.assign({ top: 34, right: 20, bottom: 46, left: 64 }, cfg.margin || {});
     const plotW = Math.max(40, width - margin.left - margin.right);
+    // 标题与图例分两行：标题在上、图例在下，图例换行时顶边距继续加高，避免与绘图区重叠
+    const legendRows = hasLegend ? countLegendRows(series, plotW) : 0;
+    const headTop = (hasTitle ? 24 : 6) + legendRows * 20 + 6;
+    margin.top = Math.max(margin.top, headTop);
     const plotH = Math.max(40, height - margin.top - margin.bottom);
+    const titleY = 16;
+    const legendY = hasTitle ? 34 : 14;
 
     const allValues = [];
     series.forEach((s) => allValues.push(...s.values));
+    // Y 轴刻度：默认线性；cfg.yScale === "log" 时按对数映射（只取正值）
+    const yLog = cfg.yScale === "log";
     let [yMin, yMax] = cfg.yDomain || extent(allValues);
-    const pad = (yMax - yMin) * 0.06;
-    yMin -= pad;
-    yMax += pad;
+    if (yLog) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      allValues.forEach((v) => {
+        if (v === null || v === undefined || !isFinite(v) || v <= 0) return;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      });
+      if (!isFinite(lo) || !isFinite(hi)) {
+        lo = 1e-6;
+        hi = 1;
+      }
+      if (lo === hi) {
+        lo /= 10;
+        hi *= 10;
+      }
+      const l0 = Math.log10(lo);
+      const l1 = Math.log10(hi);
+      const lpad = (l1 - l0) * 0.05;
+      yMin = Math.pow(10, l0 - lpad);
+      yMax = Math.pow(10, l1 + lpad);
+    } else {
+      const pad = (yMax - yMin) * 0.06;
+      yMin -= pad;
+      yMax += pad;
+    }
     if (cfg.yDomain) {
       yMin = cfg.yDomain[0];
       yMax = cfg.yDomain[1];
@@ -134,16 +208,36 @@
     const n = Math.max(...series.map((s) => s.values.length));
     const xLabels = cfg.xLabels || [];
     const xValues = cfg.xValues || null;
+    // X 轴刻度：默认线性；cfg.xScale === "log" 时按对数映射（要求 xValues > 0）
+    const xLog = cfg.xScale === "log" && Boolean(xValues) && xValues.length === n;
+    const logOf = (v) => Math.log10(Math.max(v, 1e-12));
+    let xMin = 0;
+    let xMax = 1;
+    if (xValues && xValues.length === n) {
+      xMin = Math.min(...xValues);
+      xMax = Math.max(...xValues);
+    }
 
     const xOf = (i) => {
       if (xValues && xValues.length === n) {
-        const xMin = Math.min(...xValues);
-        const xMax = Math.max(...xValues);
+        if (xLog) {
+          const lo = logOf(xMin);
+          const hi = logOf(xMax);
+          return margin.left + ((logOf(xValues[i]) - lo) / (hi - lo || 1)) * plotW;
+        }
         return margin.left + ((xValues[i] - xMin) / (xMax - xMin || 1)) * plotW;
       }
       return margin.left + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
     };
-    const yOf = (v) => margin.top + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
+    const yOf = (v) => {
+      if (yLog) {
+        const lo = logOf(yMin);
+        const hi = logOf(yMax);
+        const vv = logOf(v);
+        return margin.top + plotH - ((vv - lo) / (hi - lo || 1)) * plotH;
+      }
+      return margin.top + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
+    };
 
     const svg = ensureSvg(el, width, height);
 
@@ -161,7 +255,9 @@
     );
 
     // 水平网格 + y 轴刻度
-    const yTicks = niceTicks(yMin, yMax, Math.max(3, Math.min(7, Math.floor(plotH / 55))));
+    const yTicks = yLog
+      ? logTicks(yMin, yMax, Math.max(3, Math.min(7, Math.floor(plotH / 55))))
+      : niceTicks(yMin, yMax, Math.max(3, Math.min(7, Math.floor(plotH / 55))));
     yTicks.forEach((tick) => {
       const y = yOf(tick);
       if (y < margin.top - 1 || y > margin.top + plotH + 1) return;
@@ -192,12 +288,9 @@
       );
     });
 
-    // x 轴刻度
-    const tickCount = Math.max(2, Math.min(9, Math.floor(plotW / 90)));
-    const step = Math.max(1, Math.floor(n / tickCount));
-    for (let i = 0; i < n; i += step) {
-      const x = xOf(i);
-      const label = xLabels[i] !== undefined ? xLabels[i] : String(i);
+    // x 轴刻度：线性按数据点等距抽取，对数按 1-2-5 序列取刻度
+    const tickText = (label) => (cfg.xFormat ? cfg.xFormat(label) : T.FORMAT.timeLabel(label));
+    const drawXTick = (x, text) => {
       svg.appendChild(
         node("line", {
           x1: x,
@@ -218,9 +311,36 @@
             fill: T.PALETTE.muted,
             "font-size": 14,
           },
-          cfg.xFormat ? cfg.xFormat(label) : T.FORMAT.timeLabel(label),
+          text,
         ),
       );
+    };
+    const tickCount = Math.max(2, Math.min(9, Math.floor(plotW / 90)));
+    if (xLog) {
+      logTicks(xMin, xMax).forEach((v) => {
+        drawXTick(
+          margin.left + ((logOf(v) - logOf(xMin)) / (logOf(xMax) - logOf(xMin) || 1)) * plotW,
+          tickText(v),
+        );
+      });
+    } else if (xValues && xValues.length === n) {
+      // 有显式 x 值时按数值域等距取整刻度（而非按数据点下标抽取），
+      // 否则非均匀 x（如功率谱的周期轴）会把刻度全挤到一端
+      const xOfValue = (v) => margin.left + ((v - xMin) / (xMax - xMin || 1)) * plotW;
+      const span = Math.abs(xMax - xMin) || 1;
+      let lastX = -Infinity;
+      niceTicks(xMin, xMax, tickCount).forEach((v) => {
+        if (v < xMin - span * 1e-6 || v > xMax + span * 1e-6) return;
+        const x = xOfValue(v);
+        if (x - lastX < 46) return;
+        lastX = x;
+        drawXTick(x, tickText(v));
+      });
+    } else {
+      const step = Math.max(1, Math.floor(n / tickCount));
+      for (let i = 0; i < n; i += step) {
+        drawXTick(xOf(i), tickText(xLabels[i] !== undefined ? xLabels[i] : String(i)));
+      }
     }
 
     // 坐标轴
@@ -246,6 +366,7 @@
     );
 
     // 标记线（如突变点、周期）
+    const markerRows = []; // 每行最后一个标签的 x，用于避免标签横向压叠
     (cfg.markers || []).forEach((marker) => {
       const x = marker.index !== undefined ? xOf(marker.index) : margin.left + (marker.ratio || 0) * plotW;
       svg.appendChild(
@@ -261,14 +382,22 @@
         }),
       );
       if (marker.label) {
+        // 与上一个标签横向距离不足时换一行，避免时间相近的标记文字互相压叠
+        let row = markerRows.findIndex((lastX) => x - lastX >= 64);
+        if (row < 0) {
+          markerRows.push(x);
+          row = markerRows.length - 1;
+        } else {
+          markerRows[row] = x;
+        }
         svg.appendChild(
           node(
             "text",
             {
               x: x + 4,
-              y: margin.top + 12,
+              y: margin.top + 12 + row * 18,
               fill: marker.color || T.PALETTE.danger,
-              "font-size": 16,
+              "font-size": 14,
             },
             marker.label,
           ),
@@ -340,27 +469,32 @@
       }
     });
 
-    // 图例
-    if (series.length > 1) {
+    // 图例：标题存在时移到第二行，否则独占首行；超宽时自动换行
+    if (hasLegend) {
       let lx = margin.left + 8;
+      let ly = legendY;
       series.forEach((s, si) => {
         const color = s.color || T.SERIES_COLORS[si % T.SERIES_COLORS.length];
         const label = s.name || "序列 " + (si + 1);
-        const w = label.length * 7 + 22;
-        svg.appendChild(node("line", { x1: lx, y1: 16, x2: lx + 14, y2: 16, stroke: color, "stroke-width": 2 }));
-        svg.appendChild(node("text", { x: lx + 19, y: 19, fill: T.PALETTE.text, "font-size": 14 }, label));
+        const w = label.length * 7 + 60;
+        if (lx + w > margin.left + plotW && lx > margin.left + 8) {
+          lx = margin.left + 8;
+          ly += 18;
+        }
+        svg.appendChild(node("line", { x1: lx, y1: ly, x2: lx + 14, y2: ly, stroke: color, "stroke-width": 2 }));
+        svg.appendChild(node("text", { x: lx + 19, y: ly + 4, fill: T.PALETTE.text, "font-size": 14 }, label));
         lx += w;
       });
     }
 
     // 标题与轴标题
-    if (cfg.title) {
+    if (hasTitle) {
       svg.appendChild(
         node(
           "text",
           {
             x: margin.left + plotW / 2,
-            y: 16,
+            y: titleY,
             "text-anchor": "middle",
             fill: T.PALETTE.text,
             "font-size": 16,
@@ -469,8 +603,9 @@
       tip.style.display = "block";
       const containerRect = el.getBoundingClientRect();
       const left = (gx / svg.viewBox.baseVal.width) * containerRect.width;
-      tip.style.left = Math.min(Math.max(8, left + 12), containerRect.width - 168) + "px";
-      tip.style.top = "14px";
+      tip.style.left = Math.min(Math.max(8, left + 12), Math.max(8, containerRect.width - 168)) + "px";
+      // 提示框贴在绘图区顶部，避免压住标题与图例
+      tip.style.top = (ctx.margin.top + 6) / (svg.viewBox.baseVal.height || 1) * containerRect.height + "px";
     });
 
     overlay.addEventListener("mouseleave", () => {
@@ -579,6 +714,63 @@
     }
   }
 
+
+  // ------------------------------------------------ 等值线（marching squares）
+  // 把 rows×cols 的标量场在 level 处追踪成线段，坐标用「格子中心」为整数单位
+  function contourSegments(grid, level) {
+    const rows = grid.length;
+    const cols = rows ? grid[0].length : 0;
+    const segments = [];
+    if (rows < 2 || cols < 2) return segments;
+    const at = (r, c) => grid[r][c];
+    const ok = (v) => v !== null && v !== undefined && isFinite(v);
+    const lerp = (v0, v1, p0, p1) => {
+      const den = v1 - v0;
+      const t = den === 0 ? 0.5 : (level - v0) / den;
+      return p0 + (p1 - p0) * Math.max(0, Math.min(1, t));
+    };
+    for (let r = 0; r < rows - 1; r += 1) {
+      for (let c = 0; c < cols - 1; c += 1) {
+        const v0 = at(r, c);
+        const v1 = at(r, c + 1);
+        const v2 = at(r + 1, c + 1);
+        const v3 = at(r + 1, c);
+        if (!ok(v0) || !ok(v1) || !ok(v2) || !ok(v3)) continue;
+        const above = [v0 >= level, v1 >= level, v2 >= level, v3 >= level];
+        let idx = 0;
+        if (above[0]) idx |= 8;
+        if (above[1]) idx |= 4;
+        if (above[2]) idx |= 2;
+        if (above[3]) idx |= 1;
+        if (idx === 0 || idx === 15) continue;
+        // 四条边上的交点
+        const top = [lerp(v0, v1, c, c + 1), r];
+        const right = [c + 1, lerp(v1, v2, r, r + 1)];
+        const bottom = [lerp(v3, v2, c, c + 1), r + 1];
+        const left = [c, lerp(v0, v3, r, r + 1)];
+        const push = (a, b) => segments.push([a, b]);
+        switch (idx) {
+          case 1: push(left, bottom); break;
+          case 2: push(bottom, right); break;
+          case 3: push(left, right); break;
+          case 4: push(top, right); break;
+          case 5: push(left, top); push(bottom, right); break;
+          case 6: push(top, bottom); break;
+          case 7: push(left, top); break;
+          case 8: push(left, top); break;
+          case 9: push(top, bottom); break;
+          case 10: push(left, bottom); push(top, right); break;
+          case 11: push(top, right); break;
+          case 12: push(left, right); break;
+          case 13: push(bottom, right); break;
+          case 14: push(left, bottom); break;
+          default: break;
+        }
+      }
+    }
+    return segments;
+  }
+
   // ------------------------------------------------------------ 热力图
   function heatmap(el, cfg) {
     if (!el) return;
@@ -640,12 +832,62 @@
     const cellW = plotW / cols;
     const cellH = plotH / rows;
 
+    // 纵轴（行）刻度：cfg.rowScale === "log" 时按 y 值的对数切分行高，其余按线性切分。
+    // 小波谱的 period 是等比数列：等分高度 == 对数轴，线性轴则行高随周期递增。
+    // 仅当 y 单调且首尾同号为正时才按真实数值切分，否则退回等分，避免 log(<=0) 或逆序产生 NaN。
+    const yValid =
+      rows > 1 &&
+      y.length >= rows &&
+      y[0] > 0 &&
+      y[rows - 1] > 0 &&
+      y[0] !== y[rows - 1] &&
+      (y[0] < y[rows - 1] ? y[rows - 2] < y[rows - 1] : y[rows - 2] > y[rows - 1]);
+    const yLog = cfg.rowScale === "log" && yValid;
+    const logOf = (v) => Math.log10(Math.max(v, 1e-12));
+    const frac = yLog ? logOf : (v) => v;
+    // 行边界取相邻两点的数值中点（对数模式下即几何中点）；
+    // 首尾各按第一个/最后一个间隔外扩半格，使格子中心正好落在数值上。
+    const edgeVal = (i) => {
+      if (i <= 0) return frac(y[0]) - (frac(y[1]) - frac(y[0])) / 2;
+      if (i >= rows) {
+        return frac(y[rows - 1]) + (frac(y[rows - 1]) - frac(y[rows - 2])) / 2;
+      }
+      return (frac(y[i - 1]) + frac(y[i])) / 2;
+    };
+    const lo = yValid ? edgeVal(0) : 0;
+    const hi = yValid ? edgeVal(rows) : 1;
+    const rowEdge = (i) => {
+      if (!yValid) return margin.top + i * cellH;
+      if (i <= 0) return margin.top;
+      if (i >= rows) return margin.top + plotH;
+      return margin.top + ((edgeVal(i) - lo) / (hi - lo || 1)) * plotH;
+    };
+    const rowCenter = (i) => (rowEdge(i) + rowEdge(i + 1)) / 2;
+    // 行坐标（格子中心为整数单位，可为小数）-> 像素 y；等分模式与原公式完全一致
+    const rowY = (rowCoord) => {
+      if (!yValid) return margin.top + (rowCoord + 0.5) * cellH;
+      const t = Math.max(0, Math.min(rows - 1, rowCoord));
+      const i0 = Math.floor(t);
+      const i1 = Math.min(rows - 1, i0 + 1);
+      return rowCenter(i0) * (1 - (t - i0)) + rowCenter(i1) * (t - i0);
+    };
+    const rowOfPixel = (py) => {
+      if (!yValid) return Math.floor((py - margin.top) / cellH);
+      if (py < margin.top) return -1;
+      for (let r = 0; r < rows; r += 1) {
+        if (py < rowEdge(r + 1)) return r;
+      }
+      return rows;
+    };
+
     for (let r = 0; r < rows; r += 1) {
+      const top = rowEdge(r);
+      const h = Math.max(1, rowEdge(r + 1) - top) + 0.6;
       for (let c = 0; c < cols; c += 1) {
         const v = grid[r][c];
         if (v === null || v === undefined || !isFinite(v)) continue;
         ctx.fillStyle = colorAt(v, min, max);
-        ctx.fillRect(margin.left + c * cellW, margin.top + r * cellH, Math.ceil(cellW) + 0.6, Math.ceil(cellH) + 0.6);
+        ctx.fillRect(margin.left + c * cellW, top, Math.ceil(cellW) + 0.6, h);
       }
     }
 
@@ -655,20 +897,35 @@
     ctx.strokeRect(margin.left, margin.top, plotW, plotH);
 
     ctx.fillStyle = T.PALETTE.muted;
-    ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+    ctx.font = "14px ui-monospace, Menlo, Consolas, monospace";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
 
     const yTicks = Math.min(6, rows);
-    for (let i = 0; i <= yTicks; i += 1) {
-      const idx = Math.round((i / yTicks) * (rows - 1));
-      const py = margin.top + (idx + 0.5) * cellH;
+    // 行号 -> 刻度标签：等分模式按行号均匀取；线性轴下按数值均匀取，避免刻度值挤在短周期端
+    const tickRows = [];
+    if (yValid && !yLog) {
+      const ascending = y[rows - 1] > y[0];
+      for (let i = 0; i <= yTicks; i += 1) {
+        const target = y[0] + ((y[rows - 1] - y[0]) * i) / yTicks;
+        let best = 0;
+        for (let r = 1; r < rows; r += 1) {
+          if (Math.abs(y[r] - target) < Math.abs(y[best] - target)) best = r;
+        }
+        if (!tickRows.includes(best)) tickRows.push(best);
+      }
+      if (!ascending) tickRows.sort((a, b) => a - b);
+    } else {
+      for (let i = 0; i <= yTicks; i += 1) tickRows.push(Math.round((i / yTicks) * (rows - 1)));
+    }
+    tickRows.forEach((idx) => {
+      const py = rowCenter(idx);
       // Hovmöller 的纵轴是时间，用 yLabels（可读日期）而不是数值
       const yText = cfg.yLabels && cfg.yLabels[idx] !== undefined
         ? String(cfg.yLabels[idx]).slice(0, 10)
         : fmt(y[idx], 2);
       ctx.fillText(yText, margin.left - 6, py);
-    }
+    });
 
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -705,14 +962,14 @@
     // 标题
     if (cfg.title) {
       ctx.fillStyle = T.PALETTE.text;
-      ctx.font = "600 12px 'Segoe UI', sans-serif";
+      ctx.font = "600 16px 'Segoe UI', sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(cfg.title, margin.left + plotW / 2, 16);
     }
     if (cfg.xLabel) {
       ctx.fillStyle = T.PALETTE.muted;
-      ctx.font = "10px 'Segoe UI', sans-serif";
+      ctx.font = "16px 'Segoe UI', sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(cfg.xLabel, margin.left + plotW / 2, height - 8);
     }
@@ -721,26 +978,71 @@
       ctx.translate(14, margin.top + plotH / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.fillStyle = T.PALETTE.muted;
-      ctx.font = "10px 'Segoe UI', sans-serif";
+      ctx.font = "16px 'Segoe UI', sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(cfg.yLabel, 0, 0);
       ctx.restore();
     }
 
-    // 叠加等值线（小波影响锥等）
-    if (cfg.overlay && cfg.overlay.length) {
-      ctx.strokeStyle = "rgba(30,41,59,0.55)";
-      ctx.lineWidth = 1;
+    // 等值线（小波显著性边界等），坐标单位是格子中心
+    (cfg.contours || []).forEach((item) => {
+      const level = item.level;
+      // 可在 item.values 里指定另一套标量场（如小波「功率/阈值」比值场）
+      const field = item.values && item.values.length ? item.values : grid;
+      const segs = contourSegments(field, level);
+      if (!segs.length) return;
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      // 先画浅色描边，让线在深色热力图上也能看清
+      if (item.halo) {
+        ctx.strokeStyle = item.halo;
+        ctx.lineWidth = (item.width || 2) + 2.4;
+        ctx.beginPath();
+        segs.forEach((seg) => {
+          const a = seg[0];
+          const b = seg[1];
+          ctx.moveTo(margin.left + (a[0] + 0.5) * cellW, rowY(a[1]));
+          ctx.lineTo(margin.left + (b[0] + 0.5) * cellW, rowY(b[1]));
+        });
+        ctx.stroke();
+      }
+      ctx.strokeStyle = item.color || "rgba(239,68,68,0.95)";
+      ctx.lineWidth = item.width || 2;
+      if (item.dash) ctx.setLineDash(item.dash);
       ctx.beginPath();
-      cfg.overlay.forEach((pair, i) => {
+      segs.forEach((seg) => {
+        const a = seg[0];
+        const b = seg[1];
+        ctx.moveTo(margin.left + (a[0] + 0.5) * cellW, rowY(a[1]));
+        ctx.lineTo(margin.left + (b[0] + 0.5) * cellW, rowY(b[1]));
+      });
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    // 叠加折线（小波影响锥等），每段可单独指定样式
+    (cfg.overlays || []).forEach((line) => {
+      const pairs = line.pairs || [];
+      if (!pairs.length) return;
+      ctx.save();
+      ctx.strokeStyle = line.color || "rgba(30,41,59,0.55)";
+      ctx.lineWidth = line.width || 1;
+      if (line.dash) ctx.setLineDash(line.dash);
+      // 给折线添加转角连续
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      pairs.forEach((pair, i) => {
         if (!pair) return;
         const px = margin.left + (pair[0] + 0.5) * cellW;
-        const py = margin.top + (pair[1] + 0.5) * cellH;
+        const py = rowY(pair[1]);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       });
       ctx.stroke();
-    }
+      ctx.restore();
+    });
 
     // 悬停提示
     const tip = document.createElement("div");
@@ -752,7 +1054,7 @@
       const px = ((event.clientX - rect.left) / rect.width) * width;
       const py = ((event.clientY - rect.top) / rect.height) * height;
       const c = Math.floor((px - margin.left) / cellW);
-      const r = Math.floor((py - margin.top) / cellH);
+      const r = rowOfPixel(py);
       if (c < 0 || r < 0 || c >= cols || r >= rows) {
         tip.style.display = "none";
         return;

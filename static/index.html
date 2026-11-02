@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>古气候数据分析可视化系统</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261022b" />
+    <link rel="stylesheet" href="/static/css/style.css?v=20261030d" />
   </head>
   <body>
     <header class="header">
@@ -102,6 +102,13 @@
             </svg>
             <span>周期分析</span>
           </button>
+          <button class="menu-option" data-tool="eemd">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 12c3-4 5-4 7 0s4 4 6 0 4-4 7 0" />
+              <path d="M2 18c3-2 5-2 7 0s4 2 6 0 4-2 7 0" />
+            </svg>
+            <span>集成经验模态分解</span>
+          </button>
         </div>
       </div>
 
@@ -126,13 +133,6 @@
               <path d="M4 12c0 4 3 7 8 7" />
             </svg>
             <span>交叉谱分析</span>
-          </button>
-          <button class="menu-option" data-tool="eemd">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M2 12c3-4 5-4 7 0s4 4 6 0 4-4 7 0" />
-              <path d="M2 18c3-2 5-2 7 0s4 2 6 0 4-2 7 0" />
-            </svg>
-            <span>经验模态分解 (EEMD)</span>
           </button>
         </div>
       </div>
@@ -208,7 +208,7 @@
           <h3 id="queryTitle">数据查询</h3>
           <div class="segmented" id="modeSwitch">
             <button class="seg-btn active" data-selection-mode="point">点位</button>
-            <button class="seg-btn" data-selection-mode="area">区域平均</button>
+            <button class="seg-btn" data-selection-mode="area">区域</button>
           </div>
 
           <div id="pointFields">
@@ -242,6 +242,14 @@
                 <label for="lonMax">东界 (°E)</label>
                 <input type="number" id="lonMax" value="140" min="-180" max="360" step="1" />
               </div>
+            </div>
+            <div class="form-group" id="areaMethodGroup">
+              <label for="areaMethod">区域处理</label>
+              <select id="areaMethod">
+                <option value="mean" selected>区域平均（纬度加权）</option>
+                <option value="sum">区域求和</option>
+                <option value="std">区域标准差</option>
+              </select>
             </div>
           </div>
 
@@ -290,13 +298,13 @@
             <button class="tab" data-tab="analysis-view">分析视图</button>
           </div>
           <div class="content-actions">
-            <button class="action-btn" id="exportBtn" title="导出当前序列为 CSV">
+            <button class="action-btn hidden" id="exportBtn" title="导出当前序列为 CSV">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
               </svg>
-              <span>导出 CSV</span>
+              <span>下载 CSV</span>
             </button>
-            <button class="action-btn" id="exportNetcdfBtn" title="导出当前选取范围的 NetCDF 子集">
+            <button class="action-btn hidden" id="exportNetcdfBtn" title="把当前序列写入数据文件">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
                 <path d="M14 2v6h6M9 15h6M12 12v6" />
@@ -398,6 +406,7 @@
           <span class="modal-foot-info" id="modalFootInfo"></span>
           <div class="modal-foot-actions">
             <button class="pre-reset" id="modalCancelBtn">取消</button>
+            <button class="btn-primary" id="modalConfirmBtn" disabled>确定</button>
           </div>
         </footer>
       </div>
@@ -429,12 +438,13 @@
     </div>
 
     <!-- ?v= 版本号用于强制刷新浏览器缓存，改动前端后请同步更新 -->
-    <script src="/static/js/theme.js?v=20261022b"></script>
-    <script src="/static/js/api.js?v=20261022b"></script>
-    <script src="/static/js/charts.js?v=20261022b"></script>
-    <script src="/static/js/map.js?v=20261022b"></script>
-    <script src="/static/js/xarray_view.js?v=20261022b"></script>
-    <script src="/static/js/analysis_view.js?v=20261022b"></script>
-    <script src="/static/js/app.js?v=20261022b"></script>
+    <script src="/static/js/theme.js?v=20261030d"></script>
+    <script src="/static/js/api.js?v=20261030d"></script>
+    <script src="/static/js/charts.js?v=20261030d"></script>
+    <script src="/static/js/map.js?v=20261030d"></script>
+    <script src="/static/js/xarray_view.js?v=20261030d"></script>
+    <script src="/static/js/parameter_panel.js?v=20261030d"></script>
+    <script src="/static/js/analysis_view.js?v=20261030d"></script>
+    <script src="/static/js/app.js?v=20261030d"></script>
   </body>
 </html>

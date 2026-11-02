@@ -16,6 +16,7 @@ uvicorn启动 → app实例
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -27,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.endpoints import analysis, datasets, files
 from app.core.config import settings
 from app.core.errors import PaleoVisError
+from app.services import easyclimate_bridge
 from app.services.storage import storage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -39,6 +41,8 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     logger.info("数据目录：%s", settings.data_dir)
     logger.info("已加载文件：%d 个", len(storage.list_records()))
+    # easyclimate 首次导入约需数秒，放到后台线程预热，避免拖慢首屏
+    threading.Thread(target=easyclimate_bridge.warmup, daemon=True).start()
     yield
     # ===========服务关闭退出时执行==============
     # 清理临时目录，保留用户上传的数据
@@ -74,11 +78,31 @@ async def paleovis_error_handler(request: Request, exc: PaleoVisError) -> JSONRe
 
 
 # 请求参数校验异常
+def _jsonable_errors(errors: list[dict]) -> list[dict]:
+    """把 pydantic 的校验错误转成可 JSON 序列化的结构。
+
+    model_validator 抛出的 ValueError 会原样放进 ctx["error"]，
+    直接交给 JSONResponse 会触发 "Object of type ValueError is not JSON serializable"。
+    """
+    out: list[dict] = []
+    for item in errors:
+        clean = {k: v for k, v in item.items() if k != "ctx"}
+        ctx = item.get("ctx")
+        if ctx:
+            clean["ctx"] = {k: str(v) for k, v in ctx.items()}
+        out.append(clean)
+    return out
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content={"detail": "请求参数有误", "code": "validation_error", "errors": exc.errors()},
+        content={
+            "detail": "请求参数有误",
+            "code": "validation_error",
+            "errors": _jsonable_errors(exc.errors()),
+        },
     )
 
 

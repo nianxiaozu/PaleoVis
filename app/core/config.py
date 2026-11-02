@@ -33,7 +33,7 @@ class Settings:
     temp_dir: Path = data_dir / "temp"
 
     # ---- 上传限制 ----
-    max_upload_mb: int = int(os.getenv("PALEOVIS_MAX_UPLOAD_MB", "1024"))
+    max_upload_mb: int = int(os.getenv("PALEOVIS_MAX_UPLOAD_MB", "10240"))
     allowed_suffixes: tuple[str, ...] = (".nc", ".nc4", ".cdf", ".netcdf", ".grd")
 
     # ---- 预览图 ----
@@ -45,6 +45,9 @@ class Settings:
         return self.max_upload_mb * 1024 * 1024
 
     def ensure_dirs(self) -> None:
+        """
+        确保数据目录、上传目录、缓存目录、预览目录和临时目录存在。
+        """
         for path in (self.data_dir, self.upload_dir, self.cache_dir, self.preview_dir, self.temp_dir):
             path.mkdir(parents=True, exist_ok=True)
 
